@@ -5,6 +5,7 @@ import { EmployeeRole, Prisma } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { accrueForOrg } from "./accrual.js";
+import { createLeaveType, leaveTypeSelect } from "./leaveTypes.js";
 
 const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
@@ -13,6 +14,20 @@ const employeeIdParamSchema = z.object({ employeeId: z.string().min(1) });
 const accrualRunBodySchema = z.object({
   year: z.number().int().min(2000).max(2100).optional(),
   month: z.number().int().min(1).max(12).optional(),
+});
+
+const createLeaveTypeSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(20)
+    .regex(/^[A-Z0-9_]+$/, "Use uppercase letters, numbers, and underscores only"),
+  annualCap: z.number().int().min(1).max(365),
+  accrualFrequency: z.enum(["ANNUAL", "MONTHLY"]),
+  isPaid: z.boolean().default(true),
+  allowHalfDay: z.boolean().default(true),
 });
 
 // Every active leave type for the org, joined in memory with any existing
@@ -48,19 +63,31 @@ export const leaveRoutes = async (app: FastifyInstance) => {
 
     const leaveTypes = await prisma.leaveType.findMany({
       where: { organizationId, isActive: true },
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        accrualPerMonth: true,
-        annualCap: true,
-        isPaid: true,
-        allowHalfDay: true,
-      },
+      select: leaveTypeSelect,
       orderBy: { code: "asc" },
     });
 
     return ok({ leaveTypes });
+  });
+
+  // A duplicate code hits the organizationId_code unique constraint and is
+  // mapped to 409 CONFLICT centrally (see registerErrorHandler) — no
+  // pre-check needed, same as POST /holidays.
+  //
+  // Runs accrual for the current month right away instead of waiting for the
+  // next scheduler tick (accrualScheduler.ts, up to 24h later) — every
+  // eligible employee gets this new type's first month credited immediately,
+  // mid-month included, not just employees who join after it exists.
+  app.post("/leave/types", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request, reply) => {
+    const { organizationId } = request.auth;
+    const body = createLeaveTypeSchema.parse(request.body);
+
+    const leaveType = await createLeaveType({ organizationId, ...body });
+    const now = new Date();
+    await accrueForOrg(organizationId, now.getFullYear(), now.getMonth() + 1);
+
+    reply.status(201);
+    return ok({ leaveType });
   });
 
   app.get("/leave/balances/me", { preHandler: app.requireAuth }, async (request) => {

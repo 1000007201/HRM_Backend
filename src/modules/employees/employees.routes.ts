@@ -5,6 +5,7 @@ import { EmployeeRole } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { buildOrgChartTree } from "./orgChart.js";
+import { accrueForOrg } from "../leave/accrual.js";
 
 const employeeIncludes = {
   manager: { select: { id: true, fullName: true } },
@@ -135,6 +136,17 @@ export const employeeRoutes = async (app: FastifyInstance) => {
       data: { organizationId, managerId, departmentId, ...body },
       include: employeeIncludes,
     });
+
+    // Credits this employee's leave balances for the current month right
+    // away — a mid-month joiner (joiningDate this month, or no joiningDate)
+    // is eligible per accrueForOrg's cutoff check, so they see their leave
+    // immediately instead of waiting up to 24h for accrualScheduler.ts's
+    // next tick. ponytail: re-runs the whole org's accrual (cheap no-op for
+    // everyone already credited this month) rather than crediting just this
+    // one employee — fine at SME scale, split into a single-employee credit
+    // path if bulk-adding employees ever gets slow.
+    const now = new Date();
+    await accrueForOrg(organizationId, now.getFullYear(), now.getMonth() + 1);
 
     reply.status(201);
     return ok({ employee });

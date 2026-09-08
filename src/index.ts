@@ -1,6 +1,7 @@
 import { env } from "./env.js";
 import { buildApp } from "./server.js";
 import { prisma } from "./core/prisma.js";
+import { startAccrualScheduler } from "./modules/leave/accrualScheduler.js";
 
 const app = buildApp();
 
@@ -15,8 +16,11 @@ const start = async () => {
 
 void start();
 
+const stopAccrualScheduler = startAccrualScheduler(app.log);
+
 const shutdown = async (signal: string) => {
   app.log.info(`${signal} received, shutting down...`);
+  stopAccrualScheduler();
   await app.close();
   await prisma.$disconnect();
   process.exit(0);

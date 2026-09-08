@@ -1,4 +1,5 @@
 import { prisma } from "../../core/prisma.js";
+import { Prisma } from "../../generated/prisma/client.js";
 
 // Reasonable Indian SME defaults: Casual, Sick, Earned leave. `code` is the
 // per-org unique key (LeaveType.organizationId_code) — ensureDefaultLeaveTypes
@@ -24,4 +25,50 @@ export const ensureDefaultLeaveTypes = async (organizationId: string): Promise<v
       }),
     ),
   );
+};
+
+export type LeaveAccrualFrequency = "ANNUAL" | "MONTHLY";
+
+export interface CreateLeaveTypeInput {
+  organizationId: string;
+  name: string;
+  code: string;
+  annualCap: number;
+  accrualFrequency: LeaveAccrualFrequency;
+  isPaid: boolean;
+  allowHalfDay: boolean;
+}
+
+export const leaveTypeSelect = {
+  id: true,
+  name: true,
+  code: true,
+  accrualPerMonth: true,
+  annualCap: true,
+  isPaid: true,
+  allowHalfDay: true,
+} as const;
+
+// There's no separate "frequency" column — accrueForOrg (accrual.ts) already
+// credits min(accrualPerMonth, remaining) each month, so ANNUAL is just the
+// degenerate case accrualPerMonth == annualCap: the whole cap is exhausted on
+// the first run. MONTHLY spreads it evenly over the year.
+export const createLeaveType = (input: CreateLeaveTypeInput) => {
+  const accrualPerMonth =
+    input.accrualFrequency === "ANNUAL"
+      ? new Prisma.Decimal(input.annualCap)
+      : new Prisma.Decimal(input.annualCap).dividedBy(12).toDecimalPlaces(2);
+
+  return prisma.leaveType.create({
+    data: {
+      organizationId: input.organizationId,
+      name: input.name,
+      code: input.code,
+      annualCap: input.annualCap,
+      accrualPerMonth,
+      isPaid: input.isPaid,
+      allowHalfDay: input.allowHalfDay,
+    },
+    select: leaveTypeSelect,
+  });
 };
