@@ -9,7 +9,7 @@ import { toUtcDateKey, utcMidnight } from "../../shared/workingDays.js";
 import { buildMonthlyAttendance, buildOrgDayAttendance } from "./derivation.js";
 import { checkIn, checkOut, markAttendance } from "./attendance.service.js";
 
-const MANAGER_ROLES = [EmployeeRole.ADMIN, EmployeeRole.HR];
+const ADMIN_ROLES = [EmployeeRole.ADMIN];
 const HALF_DAY_THRESHOLD_MINUTES = env.ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES;
 
 const employeeIdParamSchema = z.object({ employeeId: z.string().min(1) });
@@ -92,7 +92,7 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
     return ok({ year, month, days });
   });
 
-  app.get("/attendance", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.get("/attendance", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { date } = dateQuerySchema.parse(request.query);
     const targetDate = date ? new Date(`${date}T00:00:00.000Z`) : utcToday();
@@ -110,7 +110,7 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
     return ok({ date: toUtcDateKey(targetDate), attendance });
   });
 
-  app.get("/attendance/:employeeId", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.get("/attendance/:employeeId", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { employeeId } = employeeIdParamSchema.parse(request.params);
     const { year, month } = resolveMonth(monthQuerySchema.parse(request.query).month);
@@ -137,7 +137,7 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
 
   // Direct HR override. The employee-initiated equivalent (request +
   // approval, with an audit trail) is in regularizations.routes.ts.
-  app.post("/attendance/mark", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.post("/attendance/mark", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const body = markAttendanceSchema.parse(request.body);
 

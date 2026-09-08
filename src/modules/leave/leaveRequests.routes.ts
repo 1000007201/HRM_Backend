@@ -11,7 +11,7 @@ import {
   submitLeaveRequest,
 } from "./leaveRequests.service.js";
 
-const APPROVER_ROLES = [EmployeeRole.MANAGER, EmployeeRole.HR, EmployeeRole.ADMIN];
+const APPROVER_ROLES = [EmployeeRole.ADMIN];
 
 const leaveTypeSummarySelect = { leaveType: { select: { id: true, name: true, code: true } } } as const;
 

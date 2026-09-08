@@ -75,21 +75,23 @@ model Verification {
 }
 
 model Organization {
-  id              String                  @id
-  name            String
-  slug            String
-  logo            String?
-  createdAt       DateTime
-  metadata        String?
-  members         Member[]
-  invitations     Invitation[]
-  employees       Employee[]
-  leaveTypes      LeaveType[]
-  leaveBalances   LeaveBalance[]
-  leaveRequests   LeaveRequest[]
-  holidays        Holiday[]
-  attendance      AttendanceRecord[]
-  regularizations RegularizationRequest[]
+  id                String                  @id
+  name              String
+  slug              String
+  logo              String?
+  createdAt         DateTime
+  metadata          String?
+  members           Member[]
+  invitations       Invitation[]
+  employees         Employee[]
+  leaveTypes        LeaveType[]
+  leaveBalances     LeaveBalance[]
+  leaveRequests     LeaveRequest[]
+  holidays          Holiday[]
+  attendance        AttendanceRecord[]
+  regularizations   RegularizationRequest[]
+  employeeDocuments EmployeeDocument[]
+  departments       Department[]
 
   @@unique([slug])
   @@map("organization")
@@ -128,9 +130,25 @@ model Invitation {
 
 enum EmployeeRole {
   ADMIN
-  HR
-  MANAGER
   EMPLOYEE
+}
+
+// Per-org, configurable like LeaveType. isActive lets HR retire a department
+// without breaking history for employees already assigned to it.
+model Department {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  isActive       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employees    Employee[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
 }
 
 model Employee {
@@ -147,6 +165,22 @@ model Employee {
   // before they joined. Nullable — null is treated as "always eligible" (e.g.
   // existing employees created before this field existed).
   joiningDate DateTime?
+  // Record-keeping only — set when an employee exits. Nothing currently
+  // branches on this (no automatic deactivation, no accrual/attendance
+  // cutoff); it's purely so HR has a place to record and see the date.
+  leavingDate DateTime?
+
+  departmentId String?
+
+  // Optional HR profile fields — all nullable, filled in over time rather
+  // than required at creation.
+  employeeCode          String?
+  phone                 String?
+  dateOfBirth           DateTime? @db.Date
+  gender                String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
 
   managerId String?
   manager   Employee?  @relation("Reports", fields: [managerId], references: [id])
@@ -160,16 +194,55 @@ model Employee {
   // erase the HR artifact.
   user                   User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
   organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department             Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   leaveBalances          LeaveBalance[]
   leaveRequests          LeaveRequest[]          @relation("LeaveRequestsByEmployee")
   decidedLeaveRequests   LeaveRequest[]          @relation("LeaveRequestsDecidedBy")
   attendance             AttendanceRecord[]
   regularizations        RegularizationRequest[] @relation("RegularizationsByEmployee")
   decidedRegularizations RegularizationRequest[] @relation("RegularizationsDecidedBy")
+  documents              EmployeeDocument[]      @relation("EmployeeDocumentsOwned")
+  uploadedDocuments      EmployeeDocument[]      @relation("EmployeeDocumentsUploadedBy")
 
   @@unique([organizationId, email])
+  @@unique([organizationId, employeeCode])
   @@index([organizationId])
   @@index([managerId])
+  @@index([departmentId])
+}
+
+enum EmployeeDocumentType {
+  ADDRESS_PROOF
+  MARKSHEET
+  IDENTITY_PROOF
+  EXPERIENCE_CERTIFICATE
+  RELIEVING_LETTER
+}
+
+// One row per uploaded file. storagePath is a generated on-disk filename
+// (uuid + original extension) under DOCUMENT_UPLOAD_DIR (see
+// src/modules/employees/employeeDocuments.routes.ts) — never the
+// caller-supplied name, so a crafted fileName can't traverse or collide on
+// disk. fileName keeps the original name for display/download.
+model EmployeeDocument {
+  id             String               @id @default(cuid())
+  organizationId String
+  employeeId     String
+  type           EmployeeDocumentType
+  fileName       String
+  storagePath    String
+  mimeType       String
+  fileSize       Int
+  uploadedById   String
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation("EmployeeDocumentsOwned", fields: [employeeId], references: [id], onDelete: Cascade)
+  uploadedBy   Employee     @relation("EmployeeDocumentsUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([organizationId])
+  @@index([employeeId])
 }
 
 // One row per (org, leave code) — e.g. CL/SL/EL. accrualPerMonth is credited

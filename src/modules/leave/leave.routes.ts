@@ -6,7 +6,7 @@ import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { accrueForOrg } from "./accrual.js";
 
-const MANAGER_ROLES = [EmployeeRole.ADMIN, EmployeeRole.HR];
+const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
 const employeeIdParamSchema = z.object({ employeeId: z.string().min(1) });
 
@@ -71,7 +71,7 @@ export const leaveRoutes = async (app: FastifyInstance) => {
     return ok({ year, balances });
   });
 
-  app.get("/leave/balances/:employeeId", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.get("/leave/balances/:employeeId", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { employeeId } = employeeIdParamSchema.parse(request.params);
 

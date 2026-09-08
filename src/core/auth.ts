@@ -7,12 +7,12 @@ import { sendEmail } from "./email.js";
 import { linkEmployeeOnAcceptInvitation, getInvitationAcceptUrl } from "../modules/identity/invitations.js";
 import { env } from "../env.js";
 
-// Org roles mirroring EmployeeRole (ADMIN/HR/MANAGER/EMPLOYEE, lowercased —
-// see toOrgRole in invitations.ts). "owner" is Better Auth's own built-in
-// role and stays as-is for whoever registers the company; these four are
-// what an invited employee's org membership carries. Only admin/hr get
-// invitation permissions — matches the ADMIN/HR-only gate on the invite
-// routes, so Better Auth's own permission check agrees with ours.
+// Org roles mirroring EmployeeRole (ADMIN/EMPLOYEE, lowercased — see
+// toOrgRole in invitations.ts). "owner" is Better Auth's own built-in role
+// and stays as-is for whoever registers the company; these two are what an
+// invited employee's org membership carries. Only admin gets invitation
+// permissions — matches the ADMIN-only gate on the invite routes, so Better
+// Auth's own permission check agrees with ours.
 const adminOrgRole = defaultAc.newRole({
   organization: ["update"],
   member: ["create", "update", "delete"],
@@ -20,10 +20,6 @@ const adminOrgRole = defaultAc.newRole({
   team: ["create", "update", "delete"],
   ac: ["create", "read", "update", "delete"],
 });
-const hrOrgRole = defaultAc.newRole({
-  invitation: ["create", "cancel"],
-});
-const managerOrgRole = defaultAc.newRole({});
 const employeeOrgRole = defaultAc.newRole({});
 
 export const auth = betterAuth({
@@ -93,8 +89,6 @@ export const auth = betterAuth({
       roles: {
         ...defaultRoles,
         admin: adminOrgRole,
-        hr: hrOrgRole,
-        manager: managerOrgRole,
         employee: employeeOrgRole,
       },
       invitationExpiresIn: 60 * 60 * 24 * 7, // 7 days

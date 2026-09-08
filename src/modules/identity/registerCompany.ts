@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { auth } from "../../core/auth.js";
 import { prisma } from "../../core/prisma.js";
 import { ensureDefaultLeaveTypes } from "../leave/leaveTypes.js";
+import { ensureDefaultDepartments } from "../departments/departments.js";
 
 export interface RegisterCompanyInput {
   companyName: string;
@@ -73,8 +74,10 @@ export const registerCompany = async ({
     await prisma.employee.create({
       data: { userId: user.id, organizationId: organization.id, fullName, email: user.email, role: "ADMIN" },
     });
-    // Every new org starts with the default CL/SL/EL leave types.
+    // Every new org starts with the default CL/SL/EL leave types and the
+    // default department set.
     await ensureDefaultLeaveTypes(organization.id);
+    await ensureDefaultDepartments(organization.id);
   } catch (err) {
     console.error(
       `[registerCompany] org setup failed for userId=${user.id} organizationId=${organization.id}; cleaning up`,

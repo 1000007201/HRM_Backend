@@ -10,10 +10,10 @@ import { ok } from "../../core/response.js";
 import { toOrgRole, getInvitationAcceptUrl } from "./invitations.js";
 
 const idParamSchema = z.object({ id: z.string().min(1) });
-const MANAGER_ROLES = [EmployeeRole.ADMIN, EmployeeRole.HR];
+const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
 export const invitationRoutes = async (app: FastifyInstance) => {
-  app.post("/api/employees/:id/invite", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request, reply) => {
+  app.post("/api/employees/:id/invite", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request, reply) => {
     const { organizationId } = request.auth;
     const { id } = idParamSchema.parse(request.params);
 
@@ -45,7 +45,7 @@ export const invitationRoutes = async (app: FastifyInstance) => {
 
   app.get(
     "/api/employees/:id/invite-link",
-    { preHandler: app.requireRole(MANAGER_ROLES) },
+    { preHandler: app.requireRole(ADMIN_ROLES) },
     async (request) => {
       const { organizationId } = request.auth;
       const { id } = idParamSchema.parse(request.params);
@@ -70,7 +70,7 @@ export const invitationRoutes = async (app: FastifyInstance) => {
     },
   );
 
-  app.get("/api/invitations", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.get("/api/invitations", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
 
     const invitations = await prisma.invitation.findMany({
@@ -83,7 +83,7 @@ export const invitationRoutes = async (app: FastifyInstance) => {
 
   app.post(
     "/api/invitations/:id/cancel",
-    { preHandler: app.requireRole(MANAGER_ROLES) },
+    { preHandler: app.requireRole(ADMIN_ROLES) },
     async (request) => {
       const { organizationId } = request.auth;
       const { id } = idParamSchema.parse(request.params);

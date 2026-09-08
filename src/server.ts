@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import { env, isProduction } from "./env.js";
 import authPlugin from "./core/plugins/auth.js";
 import authGuardPlugin from "./core/plugins/authGuard.js";
@@ -8,6 +9,8 @@ import { healthRoutes } from "./modules/health/health.routes.js";
 import { registerCompanyRoutes } from "./modules/identity/registerCompany.routes.js";
 import { invitationRoutes } from "./modules/identity/invitations.routes.js";
 import { employeeRoutes } from "./modules/employees/employees.routes.js";
+import { employeeDocumentRoutes, MAX_DOCUMENT_SIZE_BYTES } from "./modules/employees/employeeDocuments.routes.js";
+import { departmentRoutes } from "./modules/departments/departments.routes.js";
 import { leaveRoutes } from "./modules/leave/leave.routes.js";
 import { leaveRequestRoutes } from "./modules/leave/leaveRequests.routes.js";
 import { systemAccrualRoutes } from "./modules/leave/systemAccrual.routes.js";
@@ -31,6 +34,7 @@ export const buildApp = (): FastifyInstance => {
     origin: env.FRONTEND_ORIGIN,
     credentials: true,
   });
+  app.register(multipart, { limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES, files: 1 } });
 
   app.register(authPlugin);
   app.register(authGuardPlugin);
@@ -41,6 +45,8 @@ export const buildApp = (): FastifyInstance => {
   app.register(registerCompanyRoutes);
   app.register(invitationRoutes);
   app.register(employeeRoutes);
+  app.register(employeeDocumentRoutes);
+  app.register(departmentRoutes);
   app.register(leaveRoutes);
   app.register(leaveRequestRoutes);
   app.register(systemAccrualRoutes);

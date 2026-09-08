@@ -12,7 +12,7 @@ import {
   submitRegularization,
 } from "./regularizations.service.js";
 
-const APPROVER_ROLES = [EmployeeRole.MANAGER, EmployeeRole.HR, EmployeeRole.ADMIN];
+const APPROVER_ROLES = [EmployeeRole.ADMIN];
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 

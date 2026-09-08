@@ -1,6 +1,9 @@
 # Prisma generated client (recreated by `npm run build` / postinstall)
 src/generated/
 
+# Locally stored employee document uploads (dev-only storage)
+uploads/
+
 # Logs
 logs
 *.log

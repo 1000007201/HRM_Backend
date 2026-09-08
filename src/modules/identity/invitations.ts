@@ -1,7 +1,7 @@
 import { prisma } from "../../core/prisma.js";
 import { env } from "../../env.js";
 
-const EMPLOYEE_ROLES = ["ADMIN", "HR", "MANAGER", "EMPLOYEE"] as const;
+const EMPLOYEE_ROLES = ["ADMIN", "EMPLOYEE"] as const;
 type EmployeeRoleValue = (typeof EMPLOYEE_ROLES)[number];
 
 // Better Auth org roles are lowercase; EmployeeRole is uppercase. The two
@@ -10,8 +10,6 @@ type EmployeeRoleValue = (typeof EMPLOYEE_ROLES)[number];
 // inferred invitation `role` type at the createInvitation call site.
 const ORG_ROLE_BY_EMPLOYEE_ROLE = {
   ADMIN: "admin",
-  HR: "hr",
-  MANAGER: "manager",
   EMPLOYEE: "employee",
 } as const;
 

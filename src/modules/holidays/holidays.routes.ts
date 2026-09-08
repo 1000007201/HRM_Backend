@@ -6,7 +6,7 @@ import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { toHolidayYear } from "./holidays.js";
 
-const MANAGER_ROLES = [EmployeeRole.ADMIN, EmployeeRole.HR];
+const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 
@@ -44,7 +44,7 @@ export const holidayRoutes = async (app: FastifyInstance) => {
     return ok({ year, holidays });
   });
 
-  app.post("/holidays", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request, reply) => {
+  app.post("/holidays", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request, reply) => {
     const { organizationId } = request.auth;
     const { date, name } = holidaySchema.parse(request.body);
 
@@ -64,7 +64,7 @@ export const holidayRoutes = async (app: FastifyInstance) => {
   // longer or shorter list. Upserts rather than erroring on duplicates, so
   // re-uploading the same list is idempotent (a corrected name on an
   // existing date counts as `updated`, an identical entry as `unchanged`).
-  app.post("/holidays/bulk", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.post("/holidays/bulk", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { holidays } = bulkHolidaysSchema.parse(request.body);
 
@@ -112,7 +112,7 @@ export const holidayRoutes = async (app: FastifyInstance) => {
     });
   });
 
-  app.delete("/holidays/:id", { preHandler: app.requireRole(MANAGER_ROLES) }, async (request) => {
+  app.delete("/holidays/:id", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { id } = idParamSchema.parse(request.params);
 

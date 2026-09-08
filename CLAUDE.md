@@ -185,15 +185,38 @@ does. No single letters (except loop indices `i`/`j`), no vague names like
 - In dev, if migrations drift, `npx prisma migrate reset` is fine (no real data
   yet). Never run reset against anything with real data.
 
+## Git — NEVER push unless explicitly told to
+
+**Do not run `git push` — ever — unless I ask for it in that message.**
+
+- "Make this change", "fix that", "refactor X", "do whatever you think is
+  best" = write the code. It does NOT authorize a commit or a push.
+- Only an explicit instruction — "push", "push it", "commit and push",
+  "merge to main" — authorizes pushing, and it authorizes it **once**. It is
+  not standing permission for the rest of the session.
+- Same for `git merge` into `main` and anything that rewrites remote history.
+- Finishing work means: code written, `npm run typecheck` clean, tests pass,
+  and then **stop and tell me what's ready**. Leave the changes in the working
+  tree. I'll decide when they go out.
+- Committing locally is fine to ask about, but default to leaving work
+  uncommitted and saying so, rather than assuming.
+
+Rationale: pushing is outward-facing and awkward to undo. I want to review
+before anything leaves the machine.
+
 ## Before you call a task done
 
 1. `npm run typecheck` passes (no errors).
 2. `npx prisma validate` passes if the schema changed.
 3. New env vars are added to `env.ts` (zod) AND `.env.example`.
-4. New migrations are created and staged for commit.
+4. New migrations are created (their `.sql` files exist under
+   `prisma/migrations/`) — but see the git rule above: do not push them.
+5. Report what changed and stop. Do not push.
 
 ## Don'ts
 
+- **Don't `git push` unless I explicitly asked in that message** — see the git
+  rule above. This is the one to never get wrong.
 - Don't switch frameworks/libraries away from the stack above.
 - Don't add features beyond the current stage without being asked.
 - Don't hand-roll auth logic that Better Auth already provides.
