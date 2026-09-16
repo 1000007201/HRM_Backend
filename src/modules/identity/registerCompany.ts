@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { auth } from "../../core/auth.js";
 import { prisma } from "../../core/prisma.js";
-import { ensureDefaultLeaveTypes } from "../leave/leaveTypes.js";
+import { ensureDefaultLeaveTypes, ensureFloaterLeaveType } from "../leave/leaveTypes.js";
+import { grantAnnualForOrg } from "../leave/floaterGrant.js";
 import { ensureDefaultDepartments } from "../departments/departments.js";
 
 export interface RegisterCompanyInput {
@@ -74,9 +75,13 @@ export const registerCompany = async ({
     await prisma.employee.create({
       data: { userId: user.id, organizationId: organization.id, fullName, email: user.email, role: "ADMIN" },
     });
-    // Every new org starts with the default CL/SL/EL leave types and the
-    // default department set.
+    // Every new org starts with the default CL/SL/EL leave types, the
+    // floater leave type, and the default department set. The just-created
+    // ADMIN is granted their first floater balance immediately, the same way
+    // POST /leave/types runs accrual right away for a newly created type.
     await ensureDefaultLeaveTypes(organization.id);
+    await ensureFloaterLeaveType(organization.id);
+    await grantAnnualForOrg(organization.id, new Date().getFullYear());
     await ensureDefaultDepartments(organization.id);
   } catch (err) {
     console.error(

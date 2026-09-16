@@ -1,5 +1,5 @@
 import { prisma } from "../../core/prisma.js";
-import { Prisma } from "../../generated/prisma/client.js";
+import { LeaveAllocationType, Prisma } from "../../generated/prisma/client.js";
 
 export interface AccrualRunResult {
   year: number;
@@ -29,11 +29,18 @@ const endOfMonth = (year: number, month: number): Date => new Date(year, month, 
 export const accrueForOrg = async (organizationId: string, year: number, month: number): Promise<AccrualRunResult> => {
   const [employees, leaveTypes] = await Promise.all([
     prisma.employee.findMany({
-      where: { organizationId },
+      where: { organizationId, isActive: true },
       select: { id: true, joiningDate: true },
     }),
+    // MONTHLY_ACCRUAL only — ANNUAL_GRANT types (the floater type) go
+    // through grantAnnualForOrg (floaterGrant.ts) instead, once a year.
     prisma.leaveType.findMany({
-      where: { organizationId, isActive: true, accrualPerMonth: { gt: 0 } },
+      where: {
+        organizationId,
+        isActive: true,
+        allocationType: LeaveAllocationType.MONTHLY_ACCRUAL,
+        accrualPerMonth: { gt: 0 },
+      },
     }),
   ]);
 

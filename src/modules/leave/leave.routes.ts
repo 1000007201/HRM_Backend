@@ -5,7 +5,8 @@ import { EmployeeRole, Prisma } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { accrueForOrg } from "./accrual.js";
-import { createLeaveType, leaveTypeSelect } from "./leaveTypes.js";
+import { grantAnnualForOrg } from "./floaterGrant.js";
+import { createLeaveType, leaveTypeSelect, updateFloaterQuota } from "./leaveTypes.js";
 
 const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
@@ -14,6 +15,14 @@ const employeeIdParamSchema = z.object({ employeeId: z.string().min(1) });
 const accrualRunBodySchema = z.object({
   year: z.number().int().min(2000).max(2100).optional(),
   month: z.number().int().min(1).max(12).optional(),
+});
+
+const grantRunBodySchema = z.object({
+  year: z.number().int().min(2000).max(2100).optional(),
+});
+
+const updateFloaterQuotaSchema = z.object({
+  annualGrantDays: z.number().int().min(1).max(365),
 });
 
 const createLeaveTypeSchema = z.object({
@@ -121,5 +130,28 @@ export const leaveRoutes = async (app: FastifyInstance) => {
 
     const result = await accrueForOrg(organizationId, year, month);
     return ok(result);
+  });
+
+  // ADMIN only, parallel to /admin/leave/accrual/run — manual/testing trigger
+  // for the annual floater grant (floaterGrant.ts), which otherwise only runs
+  // via the shared-secret system endpoint / scheduler.
+  app.post("/admin/leave/floater/grant", { preHandler: app.requireRole([EmployeeRole.ADMIN]) }, async (request) => {
+    const { organizationId } = request.auth;
+    const { year = new Date().getFullYear() } = grantRunBodySchema.parse(request.body ?? {});
+
+    const result = await grantAnnualForOrg(organizationId, year);
+    return ok(result);
+  });
+
+  // ADMIN only — lets the org configure how many floater leaves an employee
+  // can take a year (previously fixed at 2 for every org at seed time).
+  // Applies immediately to everyone already granted this year, not just
+  // future grants — see the updateFloaterQuota comment for why.
+  app.patch("/admin/leave/floater/quota", { preHandler: app.requireRole([EmployeeRole.ADMIN]) }, async (request) => {
+    const { organizationId } = request.auth;
+    const { annualGrantDays } = updateFloaterQuotaSchema.parse(request.body);
+
+    const leaveType = await updateFloaterQuota(organizationId, annualGrantDays);
+    return ok({ leaveType });
   });
 };

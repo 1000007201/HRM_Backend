@@ -1,12 +1,15 @@
 import type { FastifyBaseLogger } from "fastify";
 import { accrueForAllOrgs } from "./accrual.js";
+import { grantAnnualForAllOrgs } from "./floaterGrant.js";
 
 // ponytail: a daily poll instead of a precise cron trigger — accrueForOrg is
 // idempotent per (employee, leaveType, year, month) via lastAccruedMonth, so
 // polling more or less often never double-credits, it only changes how many
 // hours late a missed month-start catches up. Upgrade to node-cron (or the
 // existing /system/leave/accrual/run-all + external scheduler) if crediting
-// exactly on the 1st ever matters.
+// exactly on the 1st ever matters. grantAnnualForAllOrgs is idempotent per
+// (employee, leaveType, year) the same way, so it rides along on the same
+// daily poll rather than needing its own once-a-year trigger.
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const runAccrualForCurrentMonth = async (log: FastifyBaseLogger) => {
@@ -22,6 +25,16 @@ const runAccrualForCurrentMonth = async (log: FastifyBaseLogger) => {
     }
   } catch (err) {
     log.error(err, "[accrualScheduler] monthly accrual run failed");
+  }
+
+  try {
+    const grantResults = await grantAnnualForAllOrgs(year);
+    const balancesGranted = grantResults.reduce((sum, result) => sum + result.employeesGranted, 0);
+    if (balancesGranted > 0) {
+      log.info({ year, grantResults }, `[accrualScheduler] granted ${balancesGranted} annual floater balance(s)`);
+    }
+  } catch (err) {
+    log.error(err, "[accrualScheduler] annual floater grant run failed");
   }
 };
 

@@ -24,7 +24,7 @@ const toEmployeeRole = (orgRole: string): EmployeeRoleValue => {
 };
 
 export const getInvitationAcceptUrl = (invitationId: string): string =>
-  `${env.FRONTEND_ORIGIN}/accept-invitation/${invitationId}`;
+  `${env.FRONTEND_ORIGIN[0]}/accept-invitation/${invitationId}`;
 
 interface AcceptedInvitationData {
   organization: { id: string };

@@ -36,7 +36,7 @@ export const auth = betterAuth({
     resetPasswordTokenExpiresIn: 60 * 60, // 1 hour
     revokeSessionsOnPasswordReset: true,
     sendResetPassword: async ({ user, token }) => {
-      const url = `${env.FRONTEND_ORIGIN}/reset-password?token=${token}`;
+      const url = `${env.FRONTEND_ORIGIN[0]}/reset-password?token=${token}`;
       // Not awaited: awaiting here would let email-provider latency leak
       // whether the address exists, defeating the timing-attack mitigation
       // Better Auth applies around this callback.
@@ -71,7 +71,7 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // 1 day
   },
-  trustedOrigins: [env.FRONTEND_ORIGIN],
+  trustedOrigins: env.FRONTEND_ORIGIN,
   plugins: [
     organization({
       // Org creation only happens through POST /api/register-company, which

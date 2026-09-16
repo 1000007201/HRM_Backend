@@ -1,7 +1,19 @@
 import { prisma } from "../src/core/prisma.js";
 import { registerCompany } from "../src/modules/identity/registerCompany.js";
 import { ensureDefaultDepartments } from "../src/modules/departments/departments.js";
+import { ensureFloaterLeaveType } from "../src/modules/leave/leaveTypes.js";
+import { grantAnnualForOrg } from "../src/modules/leave/floaterGrant.js";
+import { toHolidayYear } from "../src/modules/holidays/holidays.js";
 import type { EmployeeRole } from "../src/generated/prisma/client.js";
+
+// A couple of optional (floater-eligible) holidays for the demo org, so the
+// floater flow — GET /holidays/optional, applying for it, approving it — is
+// testable end to end without hand-creating one first. Upserted by date like
+// the rest of this file, so re-running the seed never duplicates them.
+const DEMO_OPTIONAL_HOLIDAYS = [
+  { date: "2026-03-04", name: "Holi (optional day)" },
+  { date: "2026-10-21", name: "Diwali (optional day)" },
+] as const;
 
 const DEMO_COMPANY_NAME = process.env.DEMO_COMPANY_NAME ?? "Acme Demo Co";
 const DEMO_ADMIN_NAME = process.env.DEMO_ADMIN_NAME ?? "Demo Admin";
@@ -77,10 +89,24 @@ const main = async () => {
         password: DEMO_ADMIN_PASSWORD,
       }).then((r) => r.organization.id));
 
-  // registerCompany already seeds the default department set for a brand new
-  // org; calling it again here is a no-op upsert, so this also covers the
-  // "org already existed from a previous seed run" path.
+  // registerCompany already seeds the default department set (and, for a
+  // brand new org, the floater leave type + its first grant) — calling these
+  // again here is a no-op upsert / idempotent grant, so this also covers the
+  // "org already existed from a previous seed run, before floater leave
+  // existed" path.
   await ensureDefaultDepartments(organizationId);
+  await ensureFloaterLeaveType(organizationId);
+
+  for (const { date, name } of DEMO_OPTIONAL_HOLIDAYS) {
+    const holidayDate = new Date(`${date}T00:00:00.000Z`);
+    await prisma.holiday.upsert({
+      where: { organizationId_date: { organizationId, date: holidayDate } },
+      create: { organizationId, date: holidayDate, name, year: toHolidayYear(holidayDate), isOptional: true },
+      update: { name, isOptional: true },
+    });
+  }
+
+  await grantAnnualForOrg(organizationId, new Date().getFullYear());
 
   // Exercises the new optional profile fields on the demo admin — idempotent,
   // same values every run.

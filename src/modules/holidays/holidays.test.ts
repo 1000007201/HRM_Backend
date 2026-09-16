@@ -40,6 +40,38 @@ test("holidays stored in the DB round-trip into keys countWorkingDays actually e
   }
 });
 
+// The property that makes an optional holiday "optional": someone who
+// doesn't take it still has it count as a normal working day, unlike a
+// non-optional holiday which reduces everyone's leave cost.
+test("an optional holiday is not excluded from countWorkingDays, unlike a non-optional one", async () => {
+  const organization = await prisma.organization.create({
+    data: { id: randomUUID(), name: "Floater Test Co", slug: `floater-test-${randomUUID()}`, createdAt: new Date() },
+  });
+
+  try {
+    const closure = utcDate("2026-03-04"); // Wednesday
+    const optional = utcDate("2026-03-05"); // Thursday
+    await prisma.holiday.createMany({
+      data: [
+        { organizationId: organization.id, date: closure, name: "Company Closure", year: toHolidayYear(closure), isOptional: false },
+        { organizationId: organization.id, date: optional, name: "Optional Holiday", year: toHolidayYear(optional), isOptional: true },
+      ],
+    });
+
+    const weekStart = utcDate("2026-03-02");
+    const weekEnd = utcDate("2026-03-06");
+    const holidayKeys = await getHolidayDateKeys(prisma, organization.id, weekStart, weekEnd);
+
+    assert.deepEqual([...holidayKeys], ["2026-03-04"], "only the non-optional date is excluded");
+    assert.equal(countWorkingDays(weekStart, weekEnd, false, holidayKeys), 4, "Mon-Fri minus the non-optional holiday only");
+
+    const optionalHolidayKeys = await getHolidayDateKeys(prisma, organization.id, weekStart, weekEnd, true);
+    assert.deepEqual([...optionalHolidayKeys], ["2026-03-05"], "isOptional=true fetches the other set");
+  } finally {
+    await prisma.organization.delete({ where: { id: organization.id } });
+  }
+});
+
 test("re-upserting the same holiday date does not create a duplicate", async () => {
   const organization = await prisma.organization.create({
     data: { id: randomUUID(), name: "Holiday Upsert Co", slug: `holiday-upsert-${randomUUID()}`, createdAt: new Date() },

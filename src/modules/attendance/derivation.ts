@@ -131,8 +131,13 @@ export const loadAttendanceContext = async (
   endDate: Date,
 ): Promise<AttendanceContext> => {
   const [holidays, approvedLeaves, records] = await Promise.all([
+    // Non-optional only — an optional holiday isn't a day off for anyone who
+    // didn't take it (see getHolidayDateKeys in
+    // src/modules/holidays/holidays.ts, the same rule for working-day
+    // counting). Someone who did take one shows ON_LEAVE via approvedLeaves
+    // below, same as any other leave type.
     db.holiday.findMany({
-      where: { organizationId, date: { gte: startDate, lte: endDate } },
+      where: { organizationId, date: { gte: startDate, lte: endDate }, isOptional: false },
       select: { date: true },
     }),
     // Any approved request overlapping the window, not just fully inside it.

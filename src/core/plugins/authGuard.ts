@@ -39,6 +39,13 @@ const resolveAuth = async (request: FastifyRequest): Promise<RequestAuthContext>
   if (!employee || employee.organizationId !== organizationId) {
     throw new AppError(403, "FORBIDDEN", "Not a member of this organization");
   }
+  // An inactive employee is locked out of the portal entirely — deactivating
+  // (see PATCH /api/employees/:id) only means something if this check exists.
+  // Their Better Auth session stays alive until it expires; this just rejects
+  // every guarded request in the meantime rather than proactively revoking it.
+  if (!employee.isActive) {
+    throw new AppError(403, "FORBIDDEN", "Your account has been deactivated");
+  }
 
   return { userId: session.user.id, organizationId, employeeId: employee.id, role: employee.role };
 };

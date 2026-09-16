@@ -161,6 +161,12 @@ model Employee {
   designation String?
   role        EmployeeRole @default(EMPLOYEE)
   invitedAt   DateTime?
+  // The active/inactive switch — deliberately not a delete. An inactive
+  // employee keeps every historical record (leave, attendance, documents)
+  // but is locked out of the portal (see resolveAuth in
+  // src/core/plugins/authGuard.ts) and stops accruing leave (see
+  // accrueForOrg in src/modules/leave/accrual.ts).
+  isActive    Boolean      @default(true)
   // Used for leave-accrual eligibility: an employee doesn't accrue for months
   // before they joined. Nullable — null is treated as "always eligible" (e.g.
   // existing employees created before this field existed).
@@ -246,19 +252,40 @@ model EmployeeDocument {
   @@index([employeeId])
 }
 
-// One row per (org, leave code) — e.g. CL/SL/EL. accrualPerMonth is credited
-// to every eligible employee's balance each month, capped at annualCap for
-// the year (see accrueForOrg in src/modules/leave/accrual.ts).
+// MONTHLY_ACCRUAL (CL/SL/EL and any custom type): accrualPerMonth is credited
+// each month up to annualCap, via accrueForOrg (src/modules/leave/accrual.ts).
+// ANNUAL_GRANT (the floater type): the full annualGrantDays is set on the
+// employee's balance once a year, via grantAnnualForOrg
+// (src/modules/leave/floaterGrant.ts) — accrueForOrg explicitly skips these.
+// accrualPerMonth/annualCap are unused for ANNUAL_GRANT types but stay
+// required for schema simplicity; they're set to 0/annualGrantDays and never
+// read on that path.
+enum LeaveAllocationType {
+  MONTHLY_ACCRUAL
+  ANNUAL_GRANT
+}
+
+// One row per (org, leave code) — e.g. CL/SL/EL.
 model LeaveType {
-  id              String  @id @default(cuid())
+  id              String              @id @default(cuid())
   organizationId  String
   name            String
   code            String
-  accrualPerMonth Decimal @db.Decimal(5, 2)
+  accrualPerMonth Decimal             @db.Decimal(5, 2)
   annualCap       Int
-  isPaid          Boolean @default(true)
-  allowHalfDay    Boolean @default(true)
-  isActive        Boolean @default(true)
+  isPaid          Boolean             @default(true)
+  allowHalfDay    Boolean             @default(true)
+  isActive        Boolean             @default(true)
+  allocationType  LeaveAllocationType @default(MONTHLY_ACCRUAL)
+  // Only meaningful when allocationType is ANNUAL_GRANT — the flat number of
+  // days granted per employee per year (see grantAnnualForOrg).
+  annualGrantDays Decimal?            @db.Decimal(6, 2)
+  // When true, submitLeaveRequest (leaveRequests.service.ts) requires every
+  // request against this type to be a single day that is one of the org's
+  // Holiday.isOptional dates — see the Holiday comment below. Nothing enforces
+  // "at most one per org" at the schema level; that's a product choice this
+  // model doesn't need to make.
+  isFloater       Boolean             @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -341,9 +368,19 @@ model LeaveRequest {
   @@index([status])
 }
 
-// A company holiday for one org. countWorkingDays (src/shared/workingDays.ts)
-// excludes these alongside weekends, so leave spanning a holiday costs the
-// employee fewer leave days.
+// A company holiday for one org.
+//
+// isOptional=false (the default) is a closure day: the whole org is off,
+// excluded from working-day/attendance calculations for everyone — see
+// getHolidayDateKeys and loadAttendanceContext.
+//
+// isOptional=true stays a normal WORKING day for anyone who doesn't take it —
+// it is deliberately NOT excluded by getHolidayDateKeys. An employee "takes"
+// one by submitting an ordinary LeaveRequest against the org's isFloater
+// LeaveType; submitLeaveRequest requires that request's single date to be one
+// of these. That reuses the whole leave balance/approval system instead of a
+// second one, so no floater-specific request/limit logic exists anywhere
+// else in this module.
 model Holiday {
   id             String @id @default(cuid())
   organizationId String
@@ -352,9 +389,10 @@ model Holiday {
   // calendar date, not an instant. `year` is derived from `date` at write
   // time (there's no computed-column support here) purely so the common
   // "the org's calendar for 2026" query is a plain indexed lookup.
-  date DateTime @db.Date
-  name String
-  year Int
+  date       DateTime @db.Date
+  name       String
+  year       Int
+  isOptional Boolean  @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

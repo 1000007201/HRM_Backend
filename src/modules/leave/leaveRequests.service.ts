@@ -1,6 +1,6 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
-import { countWorkingDays } from "../../shared/workingDays.js";
+import { countWorkingDays, isSameUtcCalendarDay, toUtcDateKey } from "../../shared/workingDays.js";
 import { getHolidayDateKeys } from "../holidays/holidays.js";
 import { getEffectiveAvailableDays } from "./balances.js";
 
@@ -30,6 +30,20 @@ export const submitLeaveRequest = async (prisma: PrismaClient, params: SubmitLea
   }
   if (isHalfDay && !leaveType.allowHalfDay) {
     throw new AppError(400, "VALIDATION", "This leave type does not allow half-day requests");
+  }
+
+  // A floater request (see the LeaveType comment in schema.prisma) must be a
+  // single day — never a range or a half-day — and that day must be one of
+  // the org's published optional holidays (Holiday.isOptional). Otherwise
+  // it's just an uncapped extra leave type wearing a floater label.
+  if (leaveType.isFloater) {
+    if (isHalfDay || !isSameUtcCalendarDay(startDate, endDate)) {
+      throw new AppError(400, "VALIDATION", "A floater leave request must be for a single day, not a half-day or a range");
+    }
+    const optionalHolidayDateKeys = await getHolidayDateKeys(prisma, organizationId, startDate, endDate, true);
+    if (!optionalHolidayDateKeys.has(toUtcDateKey(startDate))) {
+      throw new AppError(400, "VALIDATION", "A floater leave must be taken on a listed optional holiday");
+    }
   }
 
   // Company holidays are excluded alongside weekends, so leave spanning a

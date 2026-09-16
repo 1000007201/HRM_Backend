@@ -7,15 +7,22 @@ import { ok } from "../../core/response.js";
 import { toHolidayYear } from "./holidays.js";
 
 const ADMIN_ROLES = [EmployeeRole.ADMIN];
+const HOLIDAY_SELECT = { id: true, date: true, name: true, year: true, isOptional: true } as const;
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 
 // z.coerce.date() on a "YYYY-MM-DD" string parses as UTC midnight, which is
 // exactly what the @db.Date column stores — see the UTC note in
 // src/shared/workingDays.ts.
+//
+// `isOptional` defaults to false so the bulk paste/CSV format (just date +
+// name) keeps working unchanged — an optional holiday is opt-in, set
+// explicitly via POST /holidays. See the Holiday comment in schema.prisma for
+// what the flag means.
 const holidaySchema = z.object({
   date: z.coerce.date(),
   name: z.string().trim().min(1).max(200),
+  isOptional: z.boolean().default(false),
 });
 
 const bulkHolidaysSchema = z.object({
@@ -37,7 +44,22 @@ export const holidayRoutes = async (app: FastifyInstance) => {
 
     const holidays = await prisma.holiday.findMany({
       where: { organizationId, year },
-      select: { id: true, date: true, name: true, year: true },
+      select: HOLIDAY_SELECT,
+      orderBy: { date: "asc" },
+    });
+
+    return ok({ year, holidays });
+  });
+
+  // Readable by any org member — the Apply Leave form needs these to build
+  // its floater-holiday date picker.
+  app.get("/holidays/optional", { preHandler: app.requireAuth }, async (request) => {
+    const { organizationId } = request.auth;
+    const { year = new Date().getUTCFullYear() } = listQuerySchema.parse(request.query);
+
+    const holidays = await prisma.holiday.findMany({
+      where: { organizationId, year, isOptional: true },
+      select: HOLIDAY_SELECT,
       orderBy: { date: "asc" },
     });
 
@@ -46,14 +68,14 @@ export const holidayRoutes = async (app: FastifyInstance) => {
 
   app.post("/holidays", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request, reply) => {
     const { organizationId } = request.auth;
-    const { date, name } = holidaySchema.parse(request.body);
+    const { date, name, isOptional } = holidaySchema.parse(request.body);
 
     // A duplicate date hits the organizationId_date unique constraint and is
     // mapped to 409 CONFLICT centrally — no pre-check needed. Use
     // POST /holidays/bulk to upsert instead of erroring on duplicates.
     const holiday = await prisma.holiday.create({
-      data: { organizationId, date, name, year: toHolidayYear(date) },
-      select: { id: true, date: true, name: true, year: true },
+      data: { organizationId, date, name, isOptional, year: toHolidayYear(date) },
+      select: HOLIDAY_SELECT,
     });
 
     reply.status(201);
@@ -77,19 +99,19 @@ export const holidayRoutes = async (app: FastifyInstance) => {
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.holiday.findMany({
         where: { organizationId, date: { in: deduplicated.map((holiday) => holiday.date) } },
-        select: { date: true, name: true },
+        select: { date: true, name: true, isOptional: true },
       });
-      const existingNameByDateKey = new Map(existing.map((holiday) => [holiday.date.toISOString(), holiday.name]));
+      const existingByDateKey = new Map(existing.map((holiday) => [holiday.date.toISOString(), holiday]));
 
       let added = 0;
       let updated = 0;
       let unchanged = 0;
 
       for (const holiday of deduplicated) {
-        const existingName = existingNameByDateKey.get(holiday.date.toISOString());
-        if (existingName === undefined) {
+        const existingHoliday = existingByDateKey.get(holiday.date.toISOString());
+        if (existingHoliday === undefined) {
           added += 1;
-        } else if (existingName === holiday.name) {
+        } else if (existingHoliday.name === holiday.name && existingHoliday.isOptional === holiday.isOptional) {
           unchanged += 1;
         } else {
           updated += 1;
@@ -97,8 +119,14 @@ export const holidayRoutes = async (app: FastifyInstance) => {
 
         await tx.holiday.upsert({
           where: { organizationId_date: { organizationId, date: holiday.date } },
-          create: { organizationId, date: holiday.date, name: holiday.name, year: toHolidayYear(holiday.date) },
-          update: { name: holiday.name },
+          create: {
+            organizationId,
+            date: holiday.date,
+            name: holiday.name,
+            isOptional: holiday.isOptional,
+            year: toHolidayYear(holiday.date),
+          },
+          update: { name: holiday.name, isOptional: holiday.isOptional },
         });
       }
 

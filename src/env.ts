@@ -9,7 +9,15 @@ const envSchema = z.object({
     .string()
     .min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
   BETTER_AUTH_URL: z.url("BETTER_AUTH_URL must be a valid URL"),
-  FRONTEND_ORIGIN: z.url("FRONTEND_ORIGIN must be a valid URL"),
+  // Comma-separated list of origins allowed to call this API with
+  // credentials — e.g. the same machine's localhost AND its LAN IP, so the
+  // frontend works both from the dev machine and from other devices on the
+  // network at the same time.
+  FRONTEND_ORIGIN: z
+    .string()
+    .min(1, "FRONTEND_ORIGIN is required")
+    .transform((value) => value.split(",").map((origin) => origin.trim()))
+    .pipe(z.array(z.url("Each FRONTEND_ORIGIN entry must be a valid URL")).min(1)),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.email("EMAIL_FROM must be a valid email address").default("onboarding@resend.dev"),
   REQUIRE_EMAIL_VERIFICATION: z

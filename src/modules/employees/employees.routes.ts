@@ -23,6 +23,7 @@ const lightweightEmployeeSelect = {
   role: true,
   designation: true,
   userId: true,
+  isActive: true,
 } as const;
 
 // Excludes the optional HR profile fields (phone, dateOfBirth, gender,
@@ -38,6 +39,7 @@ const employeeListSelect = {
   designation: true,
   role: true,
   invitedAt: true,
+  isActive: true,
   managerId: true,
   departmentId: true,
   joiningDate: true,
@@ -75,6 +77,7 @@ const updateEmployeeSchema = z.object({
   fullName: z.string().trim().min(1).max(200).optional(),
   email: emailSchema.optional(),
   role: creatableRoleSchema.optional(),
+  isActive: z.boolean().optional(),
   designation: z.string().trim().min(1).max(200).nullable().optional(),
   managerId: z.string().min(1).nullable().optional(),
   departmentId: z.string().min(1).nullable().optional(),
@@ -106,6 +109,9 @@ const validateManagerId = async (managerId: string, organizationId: string, self
   const manager = await prisma.employee.findFirst({ where: { id: managerId, organizationId } });
   if (!manager) {
     throw new AppError(400, "VALIDATION", "managerId must reference an employee in your organization");
+  }
+  if (!manager.isActive) {
+    throw new AppError(400, "VALIDATION", "Cannot assign an inactive employee as a manager");
   }
 };
 
@@ -153,7 +159,7 @@ export const employeeRoutes = async (app: FastifyInstance) => {
   });
 
   app.patch("/api/employees/:id", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
-    const { organizationId } = request.auth;
+    const { organizationId, employeeId: requesterEmployeeId } = request.auth;
     const { id } = idParamSchema.parse(request.params);
     const body = updateEmployeeSchema.parse(request.body);
     const { managerId, departmentId } = body;
@@ -161,6 +167,23 @@ export const employeeRoutes = async (app: FastifyInstance) => {
     const existing = await prisma.employee.findFirst({ where: { id, organizationId } });
     if (!existing) {
       throw new AppError(404, "NOT_FOUND", "Employee not found");
+    }
+
+    // Deactivating locks the target out of the portal (see resolveAuth in
+    // authGuard.ts) — guard against an admin locking themselves out, or the
+    // org ending up with zero admins able to reactivate anyone.
+    if (body.isActive === false) {
+      if (id === requesterEmployeeId) {
+        throw new AppError(400, "VALIDATION", "You cannot deactivate your own account");
+      }
+      if (existing.role === EmployeeRole.ADMIN) {
+        const activeAdminCount = await prisma.employee.count({
+          where: { organizationId, role: EmployeeRole.ADMIN, isActive: true },
+        });
+        if (activeAdminCount <= 1) {
+          throw new AppError(409, "CONFLICT", "Cannot deactivate the last active admin in your organization");
+        }
+      }
     }
 
     if (managerId) {

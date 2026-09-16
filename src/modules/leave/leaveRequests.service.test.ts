@@ -112,6 +112,87 @@ test("a second request overlapping an existing pending one is rejected", async (
   });
 });
 
+test("a floater leave type only accepts a single day that is a listed optional holiday", async () => {
+  const organization = await prisma.organization.create({
+    data: { id: randomUUID(), name: "Floater Leave Co", slug: `floater-leave-${randomUUID()}`, createdAt: new Date() },
+  });
+  try {
+    const employee = await prisma.employee.create({
+      data: {
+        organizationId: organization.id,
+        fullName: "Test Employee",
+        email: `floater-leave-${randomUUID()}@example.com`,
+        role: "EMPLOYEE",
+      },
+    });
+    const leaveType = await prisma.leaveType.create({
+      data: {
+        organizationId: organization.id,
+        name: "Floater Holiday",
+        code: "FLOATER",
+        accrualPerMonth: "0",
+        annualCap: 2,
+        allocationType: "ANNUAL_GRANT",
+        annualGrantDays: "2",
+        allowHalfDay: false,
+        isFloater: true,
+      },
+    });
+    await prisma.leaveBalance.create({
+      data: { organizationId: organization.id, employeeId: employee.id, leaveTypeId: leaveType.id, year: 2026, accruedDays: "2" },
+    });
+    const optionalDate = utcDate("2026-03-05");
+    await prisma.holiday.create({
+      data: { organizationId: organization.id, date: optionalDate, name: "Optional Day", year: 2026, isOptional: true },
+    });
+
+    const params = { organizationId: organization.id, employeeId: employee.id, leaveTypeId: leaveType.id };
+
+    // Not a listed optional holiday -> rejected.
+    await assert.rejects(
+      () =>
+        submitLeaveRequest(prisma, {
+          ...params,
+          startDate: utcDate("2026-03-06"),
+          endDate: utcDate("2026-03-06"),
+          isHalfDay: false,
+        }),
+      (err: unknown) => err instanceof AppError && err.statusCode === 400 && /optional holiday/i.test(err.message),
+    );
+
+    // A range (even one that includes the optional date) -> rejected.
+    await assert.rejects(
+      () =>
+        submitLeaveRequest(prisma, {
+          ...params,
+          startDate: utcDate("2026-03-04"),
+          endDate: optionalDate,
+          isHalfDay: false,
+        }),
+      (err: unknown) => err instanceof AppError && err.statusCode === 400 && /single day/i.test(err.message),
+    );
+
+    // Half-day -> rejected, even on the optional date itself. (Caught by the
+    // leave type's own allowHalfDay: false before reaching the floater-only
+    // single-day check, but either way it's a 400.)
+    await assert.rejects(
+      () => submitLeaveRequest(prisma, { ...params, startDate: optionalDate, endDate: optionalDate, isHalfDay: true }),
+      (err: unknown) => err instanceof AppError && err.statusCode === 400,
+    );
+
+    // The actual listed optional-holiday date, as a single full day -> accepted.
+    const submitted = await submitLeaveRequest(prisma, {
+      ...params,
+      startDate: optionalDate,
+      endDate: optionalDate,
+      isHalfDay: false,
+    });
+    assert.equal(submitted.workingDays.toNumber(), 1, "an optional holiday counts as a normal working day");
+  } finally {
+    await prisma.organization.delete({ where: { id: organization.id } });
+  }
+});
+
 test("the reservation rule blocks a second request that exceeds the remaining balance", async () => {
   // 3 days accrued. First request takes 2 (pending, not yet approved).
   // A second non-overlapping 2-day request must not fit in the remaining 1.

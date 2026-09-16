@@ -34,6 +34,8 @@ export const buildApp = (): FastifyInstance => {
     origin: env.FRONTEND_ORIGIN,
     credentials: true,
   });
+  // ^ @fastify/cors accepts an array of exact-match origins natively —
+  // reflects whichever one matches the request's Origin header.
   app.register(multipart, { limits: { fileSize: MAX_DOCUMENT_SIZE_BYTES, files: 1 } });
 
   app.register(authPlugin);
