@@ -1,6 +1,8 @@
 import { prisma } from "../src/core/prisma.js";
 import { registerCompany } from "../src/modules/identity/registerCompany.js";
 import { ensureDefaultDepartments } from "../src/modules/departments/departments.js";
+import { ensureDefaultExpenseTypes } from "../src/modules/expenses/expenseTypes.js";
+import { refreshRates } from "../src/modules/currency/exchangeRates.service.js";
 import { ensureFloaterLeaveType } from "../src/modules/leave/leaveTypes.js";
 import { grantAnnualForOrg } from "../src/modules/leave/floaterGrant.js";
 import { toHolidayYear } from "../src/modules/holidays/holidays.js";
@@ -95,7 +97,17 @@ const main = async () => {
   // "org already existed from a previous seed run, before floater leave
   // existed" path.
   await ensureDefaultDepartments(organizationId);
+  await ensureDefaultExpenseTypes(organizationId);
   await ensureFloaterLeaveType(organizationId);
+
+  // Best-effort: seeding shouldn't fail in an offline/CI environment just
+  // because the currency API is unreachable — the daily scheduler (or a
+  // manual /admin/currency/refresh) will populate the cache once it is.
+  try {
+    await refreshRates(prisma);
+  } catch (err) {
+    console.warn("Seed: exchange-rate refresh skipped (Frankfurter unreachable?):", err);
+  }
 
   for (const { date, name } of DEMO_OPTIONAL_HOLIDAYS) {
     const holidayDate = new Date(`${date}T00:00:00.000Z`);

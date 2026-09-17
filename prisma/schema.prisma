@@ -92,6 +92,8 @@ model Organization {
   regularizations   RegularizationRequest[]
   employeeDocuments EmployeeDocument[]
   departments       Department[]
+  expenseTypes      ExpenseType[]
+  expenseRequests   ExpenseRequest[]
 
   @@unique([slug])
   @@map("organization")
@@ -151,6 +153,26 @@ model Department {
   @@index([organizationId])
 }
 
+// Per-org, admin-configurable expense categories (Travel, Meals, ...) — same
+// shape and lifecycle as Department: seeded with defaults on registration,
+// renameable/retireable (isActive) rather than freely deletable once
+// referenced (see the ExpenseRequest count guard in expenseTypes.routes.ts).
+model ExpenseType {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  isActive       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expenseRequests ExpenseRequest[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
 model Employee {
   id             String  @id @default(cuid())
   userId         String? @unique
@@ -198,17 +220,22 @@ model Employee {
   // SetNull (not Cascade): the Employee is an HR record independent of portal
   // login — deleting the linked User account should just revoke login, not
   // erase the HR artifact.
-  user                   User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  department             Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  leaveBalances          LeaveBalance[]
-  leaveRequests          LeaveRequest[]          @relation("LeaveRequestsByEmployee")
-  decidedLeaveRequests   LeaveRequest[]          @relation("LeaveRequestsDecidedBy")
-  attendance             AttendanceRecord[]
-  regularizations        RegularizationRequest[] @relation("RegularizationsByEmployee")
-  decidedRegularizations RegularizationRequest[] @relation("RegularizationsDecidedBy")
-  documents              EmployeeDocument[]      @relation("EmployeeDocumentsOwned")
-  uploadedDocuments      EmployeeDocument[]      @relation("EmployeeDocumentsUploadedBy")
+  user                            User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization                    Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department                      Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  leaveBalances                   LeaveBalance[]
+  leaveRequests                   LeaveRequest[]          @relation("LeaveRequestsByEmployee")
+  decidedLeaveRequests            LeaveRequest[]          @relation("LeaveRequestsDecidedBy")
+  attendance                      AttendanceRecord[]
+  regularizations                 RegularizationRequest[] @relation("RegularizationsByEmployee")
+  decidedRegularizations          RegularizationRequest[] @relation("RegularizationsDecidedBy")
+  documents                       EmployeeDocument[]      @relation("EmployeeDocumentsOwned")
+  uploadedDocuments               EmployeeDocument[]      @relation("EmployeeDocumentsUploadedBy")
+  expenseRequests                 ExpenseRequest[]        @relation("ExpenseRequestsByEmployee")
+  approverExpenseRequests         ExpenseRequest[]        @relation("ExpenseRequestsByApproverManager")
+  adminDecidedExpenseRequests     ExpenseRequest[]        @relation("ExpenseRequestsAdminDecidedBy")
+  paymentInitiatedExpenseRequests ExpenseRequest[]        @relation("ExpenseRequestsPaymentInitiatedBy")
+  uploadedExpenseAttachments      ExpenseAttachment[]     @relation("ExpenseAttachmentsUploadedBy")
 
   @@unique([organizationId, email])
   @@unique([organizationId, employeeCode])
@@ -513,4 +540,144 @@ model RegularizationRequest {
   @@index([organizationId])
   @@index([employeeId])
   @@index([status])
+}
+
+// GLOBAL reference data — deliberately NO organizationId. An exchange rate
+// (e.g. "1 USD = X INR" on a given ECB date) is not tenant-owned: every org
+// converts against the same rate for the same day, sourced from Frankfurter
+// (api.frankfurter.dev), which republishes ECB rates. This is an intentional
+// exception to the "every mutation must be tenant-scoped" rule in CLAUDE.md —
+// there is nothing to scope, the data itself has no owner.
+//
+// One row per (currency, rateDate); "the latest rate for a currency" is a
+// findFirst ordered by rateDate desc, which the @@unique index below serves
+// directly. See src/modules/currency/exchangeRates.service.ts.
+model ExchangeRate {
+  id String @id @default(cuid())
+
+  // The foreign ISO code (never "INR" — INR-to-INR is always 1 and isn't
+  // stored). Not a Prisma enum: keeping it a plain string means adding a
+  // supported currency (see SUPPORTED_CURRENCIES in
+  // src/modules/currency/currencies.ts) never needs a migration.
+  currency   String
+  // INR per 1 unit of `currency`, e.g. 95.960000 for USD.
+  inrPerUnit Decimal  @db.Decimal(12, 6)
+  // The ECB rate date Frankfurter returned — @db.Date since it's a calendar
+  // day, not an instant (same convention as Holiday.date elsewhere).
+  rateDate   DateTime @db.Date
+  fetchedAt  DateTime @default(now())
+
+  @@unique([currency, rateDate])
+}
+
+// One status field is the source of truth for the whole lifecycle — never a
+// pair of booleans (managerApproved/adminApproved), which can't represent
+// "rejected at the manager stage" vs "rejected at the admin stage" without
+// extra flags, and can drift out of sync under concurrent writes in a way a
+// single enum column with a transactional re-check (see expenseRequests.service.ts)
+// can't.
+//
+//   PENDING_MANAGER --(manager-approve)--> PENDING_ADMIN --(admin-approve)--> APPROVED --(initiate-payment)--> PAYMENT_INITIATED
+//         |                                      |
+//         +--(manager-reject)--> REJECTED <------+--(admin-reject)
+//         |
+//         +--(cancel, raiser only)--> CANCELLED
+//
+// REJECTED and CANCELLED are terminal from either stage; there is no path
+// back to PENDING_* once left.
+enum ExpenseStatus {
+  PENDING_MANAGER
+  PENDING_ADMIN
+  APPROVED
+  PAYMENT_INITIATED
+  REJECTED
+  CANCELLED
+}
+
+// An employee-raised expense reimbursement, routed through a two-stage
+// approval chain: the raiser's chosen "reporting manager" (approverManagerId
+// — not necessarily their actual Employee.managerId; see the "approver"
+// definition in expenseRequests.routes.ts) decides first, then any ADMIN.
+//
+// amount/currency is what the employee entered; exchangeRate/amountInInr/
+// rateDate are FROZEN at submission time via currency/exchangeRates.service.ts
+// convertToInr() and never recomputed — approving a request later, or the
+// daily rate refresh moving the cached rate, must never change what an
+// already-submitted expense is worth in INR.
+model ExpenseRequest {
+  id                String @id @default(cuid())
+  organizationId    String
+  employeeId        String
+  approverManagerId String
+  expenseTypeId     String
+
+  title       String
+  description String?
+  // The employee-entered amount, in `currency` — not INR.
+  amount      Decimal @db.Decimal(12, 2)
+  currency    String
+
+  // Frozen at creation (see the model comment above) — the rate this
+  // specific request was priced at, independent of whatever refreshRates()
+  // later stores in the global ExchangeRate cache for the same currency.
+  exchangeRate Decimal  @db.Decimal(12, 6)
+  amountInInr  Decimal  @db.Decimal(12, 2)
+  rateDate     DateTime @db.Date
+
+  status ExpenseStatus @default(PENDING_MANAGER)
+
+  managerDecidedAt    DateTime?
+  managerDecisionNote String?
+
+  adminDecidedById  String?
+  adminDecidedAt    DateTime?
+  adminDecisionNote String?
+
+  // Set by POST /expenses/:id/initiate-payment — the final step, currently
+  // ADMIN-gated. See the TODO on that route for gating this on a "Finance"
+  // department instead (or in addition), once Department carries that
+  // meaning — no new role.
+  paymentInitiatedById String?
+  paymentInitiatedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee           Employee            @relation("ExpenseRequestsByEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  approverManager    Employee            @relation("ExpenseRequestsByApproverManager", fields: [approverManagerId], references: [id])
+  expenseType        ExpenseType         @relation(fields: [expenseTypeId], references: [id])
+  adminDecidedBy     Employee?           @relation("ExpenseRequestsAdminDecidedBy", fields: [adminDecidedById], references: [id])
+  paymentInitiatedBy Employee?           @relation("ExpenseRequestsPaymentInitiatedBy", fields: [paymentInitiatedById], references: [id])
+  attachments        ExpenseAttachment[]
+
+  @@index([organizationId])
+  @@index([employeeId])
+  @@index([approverManagerId])
+  @@index([status])
+}
+
+// The bill(s) for one ExpenseRequest — multiple per request, same
+// UUID-storage-path pattern as EmployeeDocument (storagePath is a generated
+// filename, never the caller-supplied name, so it can't traverse or collide
+// on disk). No organizationId of its own: it's only ever reached through its
+// already tenant-scoped parent ExpenseRequest (every route looks the parent
+// up by (id, organizationId) first), same as how RegularizationRequest's
+// decidedBy is reached through the request rather than re-scoped itself.
+model ExpenseAttachment {
+  id               String @id @default(cuid())
+  expenseRequestId String
+
+  fileName     String
+  storagePath  String
+  mimeType     String
+  fileSize     Int
+  uploadedById String
+
+  createdAt DateTime @default(now())
+
+  expenseRequest ExpenseRequest @relation(fields: [expenseRequestId], references: [id], onDelete: Cascade)
+  uploadedBy     Employee       @relation("ExpenseAttachmentsUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([expenseRequestId])
 }

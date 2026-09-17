@@ -17,6 +17,11 @@ import { systemAccrualRoutes } from "./modules/leave/systemAccrual.routes.js";
 import { holidayRoutes } from "./modules/holidays/holidays.routes.js";
 import { attendanceRoutes } from "./modules/attendance/attendance.routes.js";
 import { regularizationRoutes } from "./modules/attendance/regularizations.routes.js";
+import { expenseTypeRoutes } from "./modules/expenses/expenseTypes.routes.js";
+import { expenseRequestRoutes } from "./modules/expenses/expenseRequests.routes.js";
+import { expenseAttachmentRoutes } from "./modules/expenses/expenseAttachments.routes.js";
+import { currencyRoutes } from "./modules/currency/currency.routes.js";
+import { systemCurrencyRoutes } from "./modules/currency/systemCurrency.routes.js";
 
 export const buildApp = (): FastifyInstance => {
   const app = Fastify({
@@ -55,6 +60,11 @@ export const buildApp = (): FastifyInstance => {
   app.register(holidayRoutes);
   app.register(attendanceRoutes);
   app.register(regularizationRoutes);
+  app.register(expenseTypeRoutes);
+  app.register(expenseRequestRoutes);
+  app.register(expenseAttachmentRoutes);
+  app.register(currencyRoutes);
+  app.register(systemCurrencyRoutes);
 
   return app;
 };

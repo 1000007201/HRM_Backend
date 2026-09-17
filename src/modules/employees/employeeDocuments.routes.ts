@@ -14,7 +14,7 @@ const ADMIN_ROLES: EmployeeRole[] = [EmployeeRole.ADMIN];
 
 export const DOCUMENT_UPLOAD_DIR = path.join(process.cwd(), "uploads", "employee-documents");
 export const MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_DOCUMENT_MIME_TYPES = new Set(["application/pdf", "image/jpeg", "image/png"]);
+export const ALLOWED_DOCUMENT_MIME_TYPES = new Set(["application/pdf", "image/jpeg", "image/png"]);
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 const documentParamSchema = z.object({ id: z.string().min(1), documentId: z.string().min(1) });

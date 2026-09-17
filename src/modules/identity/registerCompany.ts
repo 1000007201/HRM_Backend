@@ -4,6 +4,7 @@ import { prisma } from "../../core/prisma.js";
 import { ensureDefaultLeaveTypes, ensureFloaterLeaveType } from "../leave/leaveTypes.js";
 import { grantAnnualForOrg } from "../leave/floaterGrant.js";
 import { ensureDefaultDepartments } from "../departments/departments.js";
+import { ensureDefaultExpenseTypes } from "../expenses/expenseTypes.js";
 
 export interface RegisterCompanyInput {
   companyName: string;
@@ -76,13 +77,15 @@ export const registerCompany = async ({
       data: { userId: user.id, organizationId: organization.id, fullName, email: user.email, role: "ADMIN" },
     });
     // Every new org starts with the default CL/SL/EL leave types, the
-    // floater leave type, and the default department set. The just-created
-    // ADMIN is granted their first floater balance immediately, the same way
-    // POST /leave/types runs accrual right away for a newly created type.
+    // floater leave type, the default department set, and the default
+    // expense type set. The just-created ADMIN is granted their first
+    // floater balance immediately, the same way POST /leave/types runs
+    // accrual right away for a newly created type.
     await ensureDefaultLeaveTypes(organization.id);
     await ensureFloaterLeaveType(organization.id);
     await grantAnnualForOrg(organization.id, new Date().getFullYear());
     await ensureDefaultDepartments(organization.id);
+    await ensureDefaultExpenseTypes(organization.id);
   } catch (err) {
     console.error(
       `[registerCompany] org setup failed for userId=${user.id} organizationId=${organization.id}; cleaning up`,

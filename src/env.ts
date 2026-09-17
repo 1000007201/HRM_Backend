@@ -35,6 +35,15 @@ const envSchema = z.object({
   // Worked minutes below this on a day with attendance => HALF_DAY instead of
   // PRESENT. 240 (4h) is the usual Indian SME split of an 8h day.
   ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(240),
+  // Base URL of the Frankfurter currency API (ECB rates, no key required).
+  // Overridable so a provider swap or self-hosted mirror is a config change,
+  // not a code change — see src/modules/currency/frankfurterClient.ts.
+  FRANKFURTER_API_URL: z.url("FRANKFURTER_API_URL must be a valid URL").default("https://api.frankfurter.dev/v1"),
+  // Shared secret gating POST /system/currency/refresh (sent as the
+  // X-Currency-Refresh-Secret header). Only the daily cron should know this value.
+  CURRENCY_REFRESH_SECRET: z
+    .string()
+    .min(16, "CURRENCY_REFRESH_SECRET must be at least 16 characters"),
 });
 
 const parsed = envSchema.safeParse(process.env);
