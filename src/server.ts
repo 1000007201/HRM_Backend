@@ -22,6 +22,8 @@ import { expenseRequestRoutes } from "./modules/expenses/expenseRequests.routes.
 import { expenseAttachmentRoutes } from "./modules/expenses/expenseAttachments.routes.js";
 import { currencyRoutes } from "./modules/currency/currency.routes.js";
 import { systemCurrencyRoutes } from "./modules/currency/systemCurrency.routes.js";
+import { salaryComponentRoutes } from "./modules/salary/salaryComponents.routes.js";
+import { salaryStructureRoutes } from "./modules/salary/salaryStructures.routes.js";
 
 export const buildApp = (): FastifyInstance => {
   const app = Fastify({
@@ -65,6 +67,8 @@ export const buildApp = (): FastifyInstance => {
   app.register(expenseAttachmentRoutes);
   app.register(currencyRoutes);
   app.register(systemCurrencyRoutes);
+  app.register(salaryComponentRoutes);
+  app.register(salaryStructureRoutes);
 
   return app;
 };

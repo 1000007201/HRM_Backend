@@ -94,6 +94,8 @@ model Organization {
   departments       Department[]
   expenseTypes      ExpenseType[]
   expenseRequests   ExpenseRequest[]
+  salaryComponents  SalaryComponent[]
+  salaryStructures  SalaryStructure[]
 
   @@unique([slug])
   @@map("organization")
@@ -236,6 +238,7 @@ model Employee {
   adminDecidedExpenseRequests     ExpenseRequest[]        @relation("ExpenseRequestsAdminDecidedBy")
   paymentInitiatedExpenseRequests ExpenseRequest[]        @relation("ExpenseRequestsPaymentInitiatedBy")
   uploadedExpenseAttachments      ExpenseAttachment[]     @relation("ExpenseAttachmentsUploadedBy")
+  salaryStructures                SalaryStructure[]
 
   @@unique([organizationId, email])
   @@unique([organizationId, employeeCode])
@@ -680,4 +683,93 @@ model ExpenseAttachment {
   uploadedBy     Employee       @relation("ExpenseAttachmentsUploadedBy", fields: [uploadedById], references: [id])
 
   @@index([expenseRequestId])
+}
+
+enum ComponentType {
+  EARNING
+  EMPLOYEE_DEDUCTION
+  EMPLOYER_CONTRIBUTION
+}
+
+enum CalcType {
+  FIXED
+  PERCENTAGE
+  BALANCE
+}
+
+// The org-level rulebook — one row per salary component (Basic Pay, HRA, PF,
+// ...). `code` is the per-org unique key. `sequence` is the computation
+// order computeSalaryStructure (salaryComputation.ts) resolves in: FIXED
+// first, then PERCENTAGE (which reads a baseComponent's already-resolved
+// amount, so its sequence must exceed its base's), then BALANCE last, taking
+// whatever's left of the CTC. Sequence uniqueness and the FIXED < PERCENTAGE
+// < BALANCE ordering are business rules enforced in
+// salaryComponents.service.ts (validateComponentOrdering) — deliberately not
+// a DB constraint, since which sequence numbers are valid depends on every
+// other active component in the org, not just this row.
+model SalaryComponent {
+  id              String        @id @default(cuid())
+  organizationId  String
+  name            String
+  code            String
+  componentType   ComponentType
+  calcType        CalcType
+  fixedAmount     Decimal?      @db.Decimal(12, 2)
+  percentage      Decimal?      @db.Decimal(5, 2)
+  baseComponentId String?
+  sequence        Int
+  isActive        Boolean       @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization        Organization               @relation(fields: [organizationId], references: [id])
+  baseComponent       SalaryComponent?           @relation("ComponentBase", fields: [baseComponentId], references: [id])
+  derivedComponents   SalaryComponent[]          @relation("ComponentBase")
+  structureComponents SalaryStructureComponent[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, sequence])
+}
+
+// One row per (employee, effective period) — a full history of every salary
+// change, not just the current numbers. `effectiveTo: null` marks the single
+// currently-active structure for an employee; creating a new one closes out
+// the old one (sets its effectiveTo) in the same transaction — see
+// createSalaryStructure in salaryStructures.service.ts.
+model SalaryStructure {
+  id             String    @id @default(cuid())
+  organizationId String
+  employeeId     String
+  annualCtc      Decimal   @db.Decimal(12, 2)
+  effectiveFrom  DateTime  @db.Date
+  effectiveTo    DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization               @relation(fields: [organizationId], references: [id])
+  employee     Employee                   @relation(fields: [employeeId], references: [id])
+  components   SalaryStructureComponent[]
+
+  @@index([employeeId, effectiveFrom])
+  @@index([organizationId])
+}
+
+// The resolved per-employee amounts for one SalaryStructure — the output of
+// computeSalaryStructure, frozen onto the structure at creation time (same
+// freeze-at-submission spirit as ExpenseRequest.amountInInr): a later change
+// to the SalaryComponent rulebook (a percentage tweak, a new base) never
+// retroactively changes a historical structure's numbers.
+model SalaryStructureComponent {
+  id            String  @id @default(cuid())
+  structureId   String
+  componentId   String
+  monthlyAmount Decimal @db.Decimal(12, 2)
+  annualAmount  Decimal @db.Decimal(12, 2)
+
+  structure SalaryStructure @relation(fields: [structureId], references: [id], onDelete: Cascade)
+  component SalaryComponent @relation(fields: [componentId], references: [id])
+
+  @@unique([structureId, componentId])
 }
