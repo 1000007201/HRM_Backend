@@ -4,6 +4,9 @@ src/generated/
 # Locally stored employee document uploads (dev-only storage)
 uploads/
 
+# Generated payslip PDFs (dev-only storage — see payslip-storage.ts)
+storage/
+
 # Logs
 logs
 *.log

@@ -96,6 +96,9 @@ model Organization {
   expenseRequests   ExpenseRequest[]
   salaryComponents  SalaryComponent[]
   salaryStructures  SalaryStructure[]
+  payrollSettings   PayrollSettings?
+  payrollRuns       PayrollRun[]
+  taxDeclarations   EmployeeTaxDeclaration[]
 
   @@unique([slug])
   @@map("organization")
@@ -239,6 +242,9 @@ model Employee {
   paymentInitiatedExpenseRequests ExpenseRequest[]        @relation("ExpenseRequestsPaymentInitiatedBy")
   uploadedExpenseAttachments      ExpenseAttachment[]     @relation("ExpenseAttachmentsUploadedBy")
   salaryStructures                SalaryStructure[]
+  payslips                        Payslip[]
+  taxDeclarations                 EmployeeTaxDeclaration[]
+  approvedPayrollRuns             PayrollRun[]            @relation("PayrollRunApprovedBy")
 
   @@unique([organizationId, email])
   @@unique([organizationId, employeeCode])
@@ -727,6 +733,7 @@ model SalaryComponent {
   baseComponent       SalaryComponent?           @relation("ComponentBase", fields: [baseComponentId], references: [id])
   derivedComponents   SalaryComponent[]          @relation("ComponentBase")
   structureComponents SalaryStructureComponent[]
+  payslipComponents   PayslipComponent[]
 
   @@unique([organizationId, code])
   @@index([organizationId, sequence])
@@ -772,4 +779,164 @@ model SalaryStructureComponent {
   component SalaryComponent @relation(fields: [componentId], references: [id])
 
   @@unique([structureId, componentId])
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  PROCESSING
+  REVIEW
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+enum LopBasis {
+  CALENDAR_DAYS
+  WORKING_DAYS
+}
+
+enum TaxRegime {
+  OLD
+  NEW
+}
+
+// Org-level payroll config — one row per org, created lazily (upsert) on
+// first GET rather than seeded at registration; see payrollSettings.service.ts.
+model PayrollSettings {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  pfEnabled      Boolean  @default(true)
+  // true = cap the PF wage base at ₹15,000 basic; false = full basic.
+  pfCeiling      Boolean  @default(true)
+  esiEnabled     Boolean  @default(true)
+  ptEnabled      Boolean  @default(true)
+  // Drives the PT slab lookup in modules/payroll/ptSlabs.ts, e.g. "MAHARASHTRA".
+  ptState        String?
+  lopBasis       LopBasis @default(CALENDAR_DAYS)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+}
+
+// One row per org per month. Status is the single source of truth for the
+// lifecycle (same "one enum, never boolean pairs" reasoning as ExpenseStatus
+// above):
+//   DRAFT --(process)--> PROCESSING --(success)--> REVIEW --(approve)--> APPROVED --(pay)--> PAID
+//     |                     |
+//     +--(cancel)--> CANCELLED <--(cancel, from REVIEW)--+
+// REVIEW can also loop back to PROCESSING via reprocess (payrollRuns.service.ts
+// reuses the same processPayrollRun function). APPROVED and PAID are
+// immutable — no reprocessing past APPROVED.
+//
+// Deliberately NOT @@unique([organizationId, month, year]): a CANCELLED run
+// must not block creating a new one for the same month. Prisma's @@unique
+// can't express a WHERE clause, so "at most one non-cancelled run per
+// (org, month, year)" is a hand-written partial unique index in the
+// migration — same technique as
+// RegularizationRequest_one_pending_per_employee_date.
+model PayrollRun {
+  id                String           @id @default(cuid())
+  organizationId    String
+  month             Int
+  year              Int
+  status            PayrollRunStatus @default(DRAFT)
+  totalGross        Decimal?         @db.Decimal(14, 2)
+  totalDeductions   Decimal?         @db.Decimal(14, 2)
+  totalNet          Decimal?         @db.Decimal(14, 2)
+  totalEmployerCost Decimal?         @db.Decimal(14, 2)
+  processedAt       DateTime?
+  approvedAt        DateTime?
+  // The approving admin's Employee.id (not User.id) — consistent with
+  // ExpenseRequest.adminDecidedById elsewhere in this schema.
+  approvedById      String?
+  paidAt            DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  approvedBy   Employee?    @relation("PayrollRunApprovedBy", fields: [approvedById], references: [id])
+  payslips     Payslip[]
+
+  @@index([organizationId, month, year])
+  @@index([organizationId, status])
+}
+
+// One row per employee per run — the output of engine.ts's computePayroll,
+// frozen at process time (same freeze-at-computation spirit as
+// SalaryStructureComponent above).
+model Payslip {
+  id              String   @id @default(cuid())
+  payrollRunId    String
+  employeeId      String
+  daysInMonth     Int
+  lopDays         Int      @default(0)
+  paidDays        Int
+  grossEarnings   Decimal  @db.Decimal(12, 2)
+  totalDeductions Decimal  @db.Decimal(12, 2)
+  netPay          Decimal  @db.Decimal(12, 2)
+  // grossEarnings + employer contributions (PF, ESI) — what the employee
+  // actually costs the org, not what they take home.
+  employerCost    Decimal  @db.Decimal(12, 2)
+  createdAt       DateTime @default(now())
+
+  // Relative path under storage/ (see payslip-storage.ts) to the generated
+  // PDF — null until the payslip-generate-and-email job (or the on-the-fly
+  // fallback in the download route) has run at least once.
+  pdfPath         String?
+  pdfGeneratedAt  DateTime?
+
+  payrollRun PayrollRun         @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee           @relation(fields: [employeeId], references: [id])
+  components PayslipComponent[]
+
+  @@unique([payrollRunId, employeeId])
+  @@index([employeeId])
+}
+
+// Line items on a payslip. `name` is copied text (frozen), not just the FK,
+// so a payslip stays self-contained even if the SalaryComponent is renamed
+// or deleted later — same reasoning as PayslipComponent's sibling models
+// above. componentId is null for statutory items generated by the engine
+// (PF/ESI/PT/TDS) that have no SalaryComponent row.
+model PayslipComponent {
+  id            String        @id @default(cuid())
+  payslipId     String
+  componentId   String?
+  name          String
+  componentType ComponentType
+  amount        Decimal       @db.Decimal(12, 2)
+
+  payslip   Payslip          @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+  component SalaryComponent? @relation(fields: [componentId], references: [id])
+
+  @@index([payslipId])
+}
+
+// One row per employee per financial year (e.g. "2026-2027", Apr-Mar) — see
+// financialYearFor in modules/payroll/taxSlabs.ts. Old-regime-only fields
+// (section80C/section80D/hraExemption) are cleared to null when regime is
+// NEW; see upsertTaxDeclaration in taxDeclaration.service.ts.
+model EmployeeTaxDeclaration {
+  id                     String    @id @default(cuid())
+  organizationId         String
+  employeeId             String
+  financialYear          String
+  regime                 TaxRegime @default(NEW)
+  previousEmployerIncome Decimal?  @db.Decimal(12, 2)
+  previousEmployerTds    Decimal?  @db.Decimal(12, 2)
+  section80C             Decimal?  @db.Decimal(12, 2)
+  section80D             Decimal?  @db.Decimal(12, 2)
+  hraExemption           Decimal?  @db.Decimal(12, 2)
+  otherDeductions        Decimal?  @db.Decimal(12, 2)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee     @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, financialYear])
+  @@index([organizationId])
 }

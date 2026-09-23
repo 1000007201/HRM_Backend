@@ -24,6 +24,10 @@ import { currencyRoutes } from "./modules/currency/currency.routes.js";
 import { systemCurrencyRoutes } from "./modules/currency/systemCurrency.routes.js";
 import { salaryComponentRoutes } from "./modules/salary/salaryComponents.routes.js";
 import { salaryStructureRoutes } from "./modules/salary/salaryStructures.routes.js";
+import { payrollSettingsRoutes } from "./modules/payroll/payrollSettings.routes.js";
+import { payrollRunRoutes } from "./modules/payroll/payrollRuns.routes.js";
+import { payslipRoutes } from "./modules/payroll/payslips.routes.js";
+import { taxDeclarationRoutes } from "./modules/payroll/taxDeclaration.routes.js";
 
 export const buildApp = (): FastifyInstance => {
   const app = Fastify({
@@ -40,6 +44,12 @@ export const buildApp = (): FastifyInstance => {
   app.register(cors, {
     origin: env.FRONTEND_ORIGIN,
     credentials: true,
+    // @fastify/cors's own default is 'GET,HEAD,POST' (see its index.js) —
+    // every PUT/PATCH/DELETE route in this API (salary components, employee
+    // updates, payroll settings, ...) was silently unreachable from a real
+    // browser without this: the preflight would advertise only GET/HEAD/POST,
+    // so the browser blocks the actual request before it's ever sent.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
   });
   // ^ @fastify/cors accepts an array of exact-match origins natively —
   // reflects whichever one matches the request's Origin header.
@@ -69,6 +79,10 @@ export const buildApp = (): FastifyInstance => {
   app.register(systemCurrencyRoutes);
   app.register(salaryComponentRoutes);
   app.register(salaryStructureRoutes);
+  app.register(payrollSettingsRoutes);
+  app.register(payrollRunRoutes);
+  app.register(payslipRoutes);
+  app.register(taxDeclarationRoutes);
 
   return app;
 };

@@ -220,6 +220,19 @@ export const employeeRoutes = async (app: FastifyInstance) => {
     return ok({ employees, page, pageSize, total });
   });
 
+  // Self-service: any authenticated employee can fetch their own record — no
+  // admin gate needed, request.auth.employeeId already scopes it to "me".
+  // Fastify's router resolves this static segment before the /:id parametric
+  // route below regardless of registration order, so there's no shadowing.
+  app.get("/api/employees/me", { preHandler: app.requireAuth }, async (request) => {
+    const { employeeId } = request.auth;
+    const employee = await prisma.employee.findUniqueOrThrow({
+      where: { id: employeeId },
+      include: employeeIncludes,
+    });
+    return ok({ employee });
+  });
+
   app.get("/api/employees/:id", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
     const { organizationId } = request.auth;
     const { id } = idParamSchema.parse(request.params);
