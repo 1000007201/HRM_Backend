@@ -622,6 +622,10 @@ model ExpenseRequest {
 
   title       String
   description String?
+  // When the expense was actually incurred — @db.Date, UTC calendar day, same
+  // convention as LeaveRequest.startDate. Distinct from createdAt: a bill is
+  // often filed days after the trip.
+  expenseDate DateTime @db.Date
   // The employee-entered amount, in `currency` — not INR.
   amount      Decimal @db.Decimal(12, 2)
   currency    String

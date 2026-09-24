@@ -20,6 +20,7 @@ export interface CreateExpenseRequestParams {
   approverManagerId: string;
   title: string;
   description?: string;
+  expenseDate: Date;
   amount: number;
   currency: CurrencyCode;
 }
@@ -52,7 +53,7 @@ const assertValidApprover = async (
 };
 
 export const createExpenseRequest = async (prisma: PrismaClient, params: CreateExpenseRequestParams) => {
-  const { organizationId, employeeId, expenseTypeId, approverManagerId, title, description, amount, currency } =
+  const { organizationId, employeeId, expenseTypeId, approverManagerId, title, description, expenseDate, amount, currency } =
     params;
 
   const expenseType = await prisma.expenseType.findFirst({
@@ -75,6 +76,7 @@ export const createExpenseRequest = async (prisma: PrismaClient, params: CreateE
       expenseTypeId,
       title,
       description,
+      expenseDate,
       amount: new Prisma.Decimal(amount),
       currency,
       exchangeRate: inrPerUnit,

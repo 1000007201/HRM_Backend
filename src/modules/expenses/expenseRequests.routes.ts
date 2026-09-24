@@ -20,11 +20,19 @@ const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
 const idParamSchema = z.object({ id: z.string().min(1) });
 
+// expenseDate: z.coerce.date() on "YYYY-MM-DD" parses as UTC midnight, which
+// is exactly what the @db.Date column stores — same convention as the holiday
+// and leave routes. A future date is rejected here (you can't have already
+// spent money tomorrow); how far back is allowed is a policy question we
+// don't have an answer for yet, so the past is open.
 const createExpenseRequestSchema = z.object({
   expenseTypeId: z.string().min(1),
   approverManagerId: z.string().min(1),
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().min(1).max(2000).optional(),
+  expenseDate: z.coerce.date().refine((date) => date.getTime() <= Date.now(), {
+    message: "expenseDate cannot be in the future",
+  }),
   amount: z.number().positive(),
   currency: currencyCodeSchema,
 });
