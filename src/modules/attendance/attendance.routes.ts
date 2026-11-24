@@ -4,13 +4,11 @@ import { prisma } from "../../core/prisma.js";
 import { AttendanceStatus, EmployeeRole } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
-import { env } from "../../env.js";
 import { toUtcDateKey, utcMidnight } from "../../shared/workingDays.js";
 import { buildMonthlyAttendance, buildOrgDayAttendance } from "./derivation.js";
 import { checkIn, checkOut, markAttendance } from "./attendance.service.js";
 
 const ADMIN_ROLES = [EmployeeRole.ADMIN];
-const HALF_DAY_THRESHOLD_MINUTES = env.ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES;
 
 const employeeIdParamSchema = z.object({ employeeId: z.string().min(1) });
 
@@ -70,9 +68,9 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
   });
 
   app.post("/attendance/check-out", { preHandler: app.requireAuth }, async (request) => {
-    const { employeeId } = request.auth;
+    const { organizationId, employeeId } = request.auth;
 
-    const record = await checkOut(prisma, { employeeId });
+    const record = await checkOut(prisma, { organizationId, employeeId });
     return ok({ record });
   });
 
@@ -86,7 +84,6 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
       year,
       month,
       today: utcToday(),
-      halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
     });
 
     return ok({ year, month, days });
@@ -104,7 +101,6 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
       organizationId,
       date: targetDate,
       today: utcToday(),
-      halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
     });
 
     return ok({ date: toUtcDateKey(targetDate), attendance });
@@ -129,7 +125,6 @@ export const attendanceRoutes = async (app: FastifyInstance) => {
       year,
       month,
       today: utcToday(),
-      halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
     });
 
     return ok({ employee, year, month, days });

@@ -3,6 +3,7 @@ import { AppError } from "../../core/errors.js";
 import { countWorkingDays, isSameUtcCalendarDay, toUtcDateKey } from "../../shared/workingDays.js";
 import { getHolidayDateKeys } from "../holidays/holidays.js";
 import { getEffectiveAvailableDays } from "./balances.js";
+import { getAttendanceSettings, weekOffSet } from "../attendance/attendanceSettings.service.js";
 
 // Business operations for the leave-request lifecycle. Routes parse input,
 // authorize, and call one of these — all the multi-step and transactional
@@ -46,12 +47,15 @@ export const submitLeaveRequest = async (prisma: PrismaClient, params: SubmitLea
     }
   }
 
-  // Company holidays are excluded alongside weekends, so leave spanning a
-  // holiday costs the employee fewer days. Only NEW submissions are
-  // affected — already-submitted requests keep the workingDays they were
-  // stored with; editing the calendar never retroactively recomputes them.
-  const holidayDateKeys = await getHolidayDateKeys(prisma, organizationId, startDate, endDate);
-  const workingDays = countWorkingDays(startDate, endDate, isHalfDay, holidayDateKeys);
+  // Company holidays and org-configured week-off days are excluded, so
+  // leave spanning a holiday or week off costs the employee fewer days. Only
+  // NEW submissions are affected — already-submitted requests keep the
+  // workingDays they were stored with.
+  const [holidayDateKeys, settings] = await Promise.all([
+    getHolidayDateKeys(prisma, organizationId, startDate, endDate),
+    getAttendanceSettings(prisma, organizationId),
+  ]);
+  const workingDays = countWorkingDays(startDate, endDate, isHalfDay, holidayDateKeys, weekOffSet(settings.weekOffDays));
   if (workingDays <= 0) {
     throw new AppError(
       400,

@@ -1,5 +1,6 @@
 import { AttendanceSource, AttendanceStatus, type Prisma, type PrismaClient } from "../../generated/prisma/client.js";
-import { eachUtcDateInRange, isWeekend, toUtcDateKey, utcMidnight } from "../../shared/workingDays.js";
+import { eachUtcDateInRange, isWeekOff, toUtcDateKey, utcMidnight } from "../../shared/workingDays.js";
+import { getAttendanceSettings, weekOffSet } from "./attendanceSettings.service.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -39,7 +40,8 @@ export interface DeriveDailyStatusInput {
   holidayDateKeys: ReadonlySet<string>;
   approvedLeaveDateKeys: ReadonlySet<string>;
   record?: AttendanceRecordFacts | null;
-  halfDayThresholdMinutes: number;
+  fullDayMinutes: number;
+  weekOffDays: ReadonlySet<number>;
 }
 
 // Whole minutes between two punches, floored at 0. Shared by self check-out,
@@ -52,11 +54,11 @@ export const toWorkedMinutes = (checkInAt: Date, checkOutAt: Date): number =>
 // the two can't drift apart on the threshold comparison.
 export const statusFromWorkedMinutes = (
   workedMinutes: number | null,
-  halfDayThresholdMinutes: number,
+  fullDayMinutes: number,
 ): AttendanceStatus =>
   // null = checked in, not yet out. The day is still open, so treat it as
   // present rather than pre-judging it a half day.
-  workedMinutes === null || workedMinutes >= halfDayThresholdMinutes
+  workedMinutes === null || workedMinutes >= fullDayMinutes
     ? AttendanceStatus.PRESENT
     : AttendanceStatus.HALF_DAY;
 
@@ -70,25 +72,26 @@ export const statusFromWorkedMinutes = (
 // Callers bulk-load via loadAttendanceContext below.
 //
 // Priority order (first match wins):
-//   1. weekend                      -> WEEK_OFF
-//   2. org holiday                  -> HOLIDAY
-//   3. approved leave               -> ON_LEAVE
-//   4. has a record                 -> an explicit human decision's stored status
-//                                      (HR mark / approved regularization), else
-//                                      PRESENT/HALF_DAY by worked time
-//   5. past working day, no record  -> ABSENT
-//   6. today/future, no record      -> null (not yet determined)
+//   1. week off (per org settings)   -> WEEK_OFF
+//   2. org holiday                   -> HOLIDAY
+//   3. approved leave                -> ON_LEAVE
+//   4. has a record                  -> an explicit human decision's stored status
+//                                       (HR mark / approved regularization), else
+//                                       PRESENT/HALF_DAY by worked time
+//   5. past working day, no record   -> ABSENT
+//   6. today/future, no record       -> null (not yet determined)
 export const deriveDailyStatus = ({
   date,
   today,
   holidayDateKeys,
   approvedLeaveDateKeys,
   record,
-  halfDayThresholdMinutes,
+  fullDayMinutes,
+  weekOffDays,
 }: DeriveDailyStatusInput): DerivedDayStatus => {
   const dateKey = toUtcDateKey(date);
 
-  if (isWeekend(date)) {
+  if (isWeekOff(date, weekOffDays)) {
     return AttendanceStatus.WEEK_OFF;
   }
   if (holidayDateKeys.has(dateKey)) {
@@ -104,7 +107,7 @@ export const deriveDailyStatus = ({
   if (record) {
     return isExplicitHumanDecision(record.source)
       ? record.status
-      : statusFromWorkedMinutes(record.workedMinutes, halfDayThresholdMinutes);
+      : statusFromWorkedMinutes(record.workedMinutes, fullDayMinutes);
   }
 
   // A working day already past with nothing recorded is an absence. Today
@@ -184,12 +187,15 @@ export interface DerivedDay {
   note: string | null;
 }
 
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
 const toDerivedDay = (
   date: Date,
   employeeId: string,
   context: AttendanceContext,
   today: Date,
-  halfDayThresholdMinutes: number,
+  fullDayMinutes: number,
+  weekOffDays: ReadonlySet<number>,
 ): DerivedDay => {
   const dateKey = toUtcDateKey(date);
   const record = context.recordsByEmployeeAndDateKey.get(contextKey(employeeId, dateKey)) ?? null;
@@ -202,7 +208,8 @@ const toDerivedDay = (
       holidayDateKeys: context.holidayDateKeys,
       approvedLeaveDateKeys: context.approvedLeaveDateKeysByEmployeeId.get(employeeId) ?? EMPTY_KEYS,
       record,
-      halfDayThresholdMinutes,
+      fullDayMinutes,
+      weekOffDays,
     }),
     checkInAt: record?.checkInAt ?? null,
     checkOutAt: record?.checkOutAt ?? null,
@@ -212,8 +219,6 @@ const toDerivedDay = (
   };
 };
 
-const EMPTY_KEYS: ReadonlySet<string> = new Set();
-
 /** First and last UTC calendar day of a month (month is 1-12). */
 export const monthBounds = (year: number, month: number): { startDate: Date; endDate: Date } => ({
   startDate: new Date(Date.UTC(year, month - 1, 1)),
@@ -221,32 +226,43 @@ export const monthBounds = (year: number, month: number): { startDate: Date; end
 });
 
 // Every day of a month for one employee, each with its derived status.
+// Fetches the org's AttendanceSettings internally — callers don't need to
+// resolve thresholds or week-off days.
 export const buildMonthlyAttendance = async (
   db: Db,
-  params: { organizationId: string; employeeId: string; year: number; month: number; today: Date; halfDayThresholdMinutes: number },
+  params: { organizationId: string; employeeId: string; year: number; month: number; today: Date },
 ): Promise<DerivedDay[]> => {
-  const { organizationId, employeeId, year, month, today, halfDayThresholdMinutes } = params;
+  const { organizationId, employeeId, year, month, today } = params;
   const { startDate, endDate } = monthBounds(year, month);
 
-  const context = await loadAttendanceContext(db, organizationId, [employeeId], startDate, endDate);
+  const [context, settings] = await Promise.all([
+    loadAttendanceContext(db, organizationId, [employeeId], startDate, endDate),
+    getAttendanceSettings(db, organizationId),
+  ]);
+  const wod = weekOffSet(settings.weekOffDays);
 
   return eachUtcDateInRange(startDate, endDate).map((date) =>
-    toDerivedDay(date, employeeId, context, today, halfDayThresholdMinutes),
+    toDerivedDay(date, employeeId, context, today, settings.fullDayMinutes, wod),
   );
 };
 
 // One day's derived status for every employee in the org.
 export const buildOrgDayAttendance = async (
   db: Db,
-  params: { organizationId: string; date: Date; today: Date; halfDayThresholdMinutes: number },
+  params: { organizationId: string; date: Date; today: Date },
 ): Promise<Array<{ employee: { id: string; fullName: string }; day: DerivedDay }>> => {
-  const { organizationId, date, today, halfDayThresholdMinutes } = params;
+  const { organizationId, date, today } = params;
 
-  const employees = await db.employee.findMany({
-    where: { organizationId },
-    select: { id: true, fullName: true },
-    orderBy: { fullName: "asc" },
-  });
+  const [employees, settings] = await Promise.all([
+    db.employee.findMany({
+      where: { organizationId },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: "asc" },
+    }),
+    getAttendanceSettings(db, organizationId),
+  ]);
+  const wod = weekOffSet(settings.weekOffDays);
+
   const context = await loadAttendanceContext(
     db,
     organizationId,
@@ -257,6 +273,6 @@ export const buildOrgDayAttendance = async (
 
   return employees.map((employee) => ({
     employee,
-    day: toDerivedDay(date, employee.id, context, today, halfDayThresholdMinutes),
+    day: toDerivedDay(date, employee.id, context, today, settings.fullDayMinutes, wod),
   }));
 };

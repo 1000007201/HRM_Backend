@@ -1,23 +1,14 @@
 import { AttendanceStatus, Prisma, type PrismaClient } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
-import { env } from "../../env.js";
 import { utcMidnight } from "../../shared/workingDays.js";
 import { deriveDailyStatus, loadAttendanceContext, statusFromWorkedMinutes, toWorkedMinutes } from "./derivation.js";
-
-// Business operations for attendance capture. Routes parse input, authorize,
-// and call one of these. The pure reconciliation logic stays in
-// derivation.ts and still takes its threshold as an argument (that's where
-// testability matters); this layer is the one that resolves it from config.
-const HALF_DAY_THRESHOLD_MINUTES = env.ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES;
+import { getAttendanceSettings, weekOffSet } from "./attendanceSettings.service.js";
 
 export const checkIn = async (prisma: PrismaClient, params: { organizationId: string; employeeId: string; now?: Date }) => {
   const { organizationId, employeeId } = params;
   const now = params.now ?? new Date();
   const today = utcMidnight(now);
 
-  // Serializable + upsert on the (employeeId, date) unique constraint: two
-  // simultaneous check-ins would otherwise both find "no record" and both
-  // insert. Postgres aborts one, surfaced as 409 by the error handler.
   return prisma.$transaction(
     async (tx) => {
       const existing = await tx.attendanceRecord.findUnique({
@@ -27,17 +18,18 @@ export const checkIn = async (prisma: PrismaClient, params: { organizationId: st
         throw new AppError(409, "CONFLICT", "You have already checked in today");
       }
 
-      // Reuse the same reconciliation the read views use, so "is today a
-      // working day for me" can't answer differently here than in the
-      // month view.
-      const context = await loadAttendanceContext(tx, organizationId, [employeeId], today, today);
+      const [context, settings] = await Promise.all([
+        loadAttendanceContext(tx, organizationId, [employeeId], today, today),
+        getAttendanceSettings(tx, organizationId),
+      ]);
       const derived = deriveDailyStatus({
         date: today,
         today,
         holidayDateKeys: context.holidayDateKeys,
         approvedLeaveDateKeys: context.approvedLeaveDateKeysByEmployeeId.get(employeeId) ?? new Set(),
         record: null,
-        halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
+        fullDayMinutes: settings.fullDayMinutes,
+        weekOffDays: weekOffSet(settings.weekOffDays),
       });
       if (derived === AttendanceStatus.WEEK_OFF) {
         throw new AppError(409, "CONFLICT", "Today is a week off — no check-in needed");
@@ -51,8 +43,6 @@ export const checkIn = async (prisma: PrismaClient, params: { organizationId: st
 
       return tx.attendanceRecord.upsert({
         where: { employeeId_date: { employeeId, date: today } },
-        // PRESENT is provisional until check-out recomputes it from worked
-        // time (statusFromWorkedMinutes treats an open day as present).
         create: {
           organizationId,
           employeeId,
@@ -68,8 +58,11 @@ export const checkIn = async (prisma: PrismaClient, params: { organizationId: st
   );
 };
 
-export const checkOut = async (prisma: PrismaClient, params: { employeeId: string; now?: Date }) => {
-  const { employeeId } = params;
+export const checkOut = async (
+  prisma: PrismaClient,
+  params: { organizationId: string; employeeId: string; now?: Date },
+) => {
+  const { organizationId, employeeId } = params;
   const now = params.now ?? new Date();
   const today = utcMidnight(now);
 
@@ -85,13 +78,14 @@ export const checkOut = async (prisma: PrismaClient, params: { employeeId: strin
         throw new AppError(409, "CONFLICT", "You have already checked out today");
       }
 
+      const settings = await getAttendanceSettings(tx, organizationId);
       const workedMinutes = toWorkedMinutes(existing.checkInAt, now);
       return tx.attendanceRecord.update({
         where: { id: existing.id },
         data: {
           checkOutAt: now,
           workedMinutes,
-          status: statusFromWorkedMinutes(workedMinutes, HALF_DAY_THRESHOLD_MINUTES),
+          status: statusFromWorkedMinutes(workedMinutes, settings.fullDayMinutes),
         },
       });
     },
@@ -126,8 +120,6 @@ export const markAttendance = async (prisma: PrismaClient, params: MarkAttendanc
         where: { employeeId_date: { employeeId, date: day } },
       });
 
-      // Times may arrive across two calls (in now, out later), so recompute
-      // from the merged pair rather than only what's in this payload.
       const mergedCheckInAt = checkInAt ?? existing?.checkInAt ?? null;
       const mergedCheckOutAt = checkOutAt ?? existing?.checkOutAt ?? null;
       if (mergedCheckInAt && mergedCheckOutAt && mergedCheckOutAt <= mergedCheckInAt) {
@@ -136,14 +128,12 @@ export const markAttendance = async (prisma: PrismaClient, params: MarkAttendanc
       const workedMinutes =
         mergedCheckInAt && mergedCheckOutAt ? toWorkedMinutes(mergedCheckInAt, mergedCheckOutAt) : null;
 
-      // An explicit status wins; otherwise fall back to the shared
-      // worked-time rule so HR entering only times still gets the same
-      // PRESENT/HALF_DAY split a self check-out would produce.
+      const settings = await getAttendanceSettings(tx, organizationId);
       const data = {
         checkInAt: mergedCheckInAt,
         checkOutAt: mergedCheckOutAt,
         workedMinutes,
-        status: status ?? statusFromWorkedMinutes(workedMinutes, HALF_DAY_THRESHOLD_MINUTES),
+        status: status ?? statusFromWorkedMinutes(workedMinutes, settings.fullDayMinutes),
         source: "HR_MARKED",
         note: note ?? existing?.note ?? null,
       } as const;

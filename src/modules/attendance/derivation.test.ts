@@ -12,7 +12,8 @@ import {
 
 const utcDate = (isoDate: string): Date => new Date(`${isoDate}T00:00:00.000Z`);
 
-const THRESHOLD = 240;
+const FULL_DAY = 480;
+const WEEK_OFF_DAYS: ReadonlySet<number> = new Set([0, 6]);
 // March 2026: Mon 2nd .. Fri 6th is a work week; 7th/8th are Sat/Sun.
 const TODAY = utcDate("2026-03-20");
 
@@ -29,7 +30,8 @@ const derive = (overrides: {
     holidayDateKeys: new Set(overrides.holidays ?? []),
     approvedLeaveDateKeys: new Set(overrides.leaves ?? []),
     record: overrides.record ?? null,
-    halfDayThresholdMinutes: THRESHOLD,
+    fullDayMinutes: FULL_DAY,
+    weekOffDays: WEEK_OFF_DAYS,
   });
 
 const selfRecord = (workedMinutes: number | null): AttendanceRecordFacts => ({
@@ -64,13 +66,13 @@ test("approved leave beats attendance on an ordinary working day", () => {
 
 test("a full day worked is PRESENT, a short day is HALF_DAY", () => {
   assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(480) }), AttendanceStatus.PRESENT);
-  assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(THRESHOLD) }), AttendanceStatus.PRESENT);
-  assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(THRESHOLD - 1) }), AttendanceStatus.HALF_DAY);
+  assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(FULL_DAY) }), AttendanceStatus.PRESENT);
+  assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(FULL_DAY - 1) }), AttendanceStatus.HALF_DAY);
 });
 
 test("checked in but not out yet counts as PRESENT, not a half day", () => {
   assert.equal(derive({ date: utcDate("2026-03-04"), record: selfRecord(null) }), AttendanceStatus.PRESENT);
-  assert.equal(statusFromWorkedMinutes(null, THRESHOLD), AttendanceStatus.PRESENT);
+  assert.equal(statusFromWorkedMinutes(null, FULL_DAY), AttendanceStatus.PRESENT);
 });
 
 test("an HR correction overrides what the clock times would say", () => {
@@ -111,7 +113,7 @@ test("a SELF record is still recomputed from worked time, not trusted blindly", 
   const staleStatus: AttendanceRecordFacts = {
     checkInAt: null,
     checkOutAt: null,
-    workedMinutes: 60, // well under the 240 threshold
+    workedMinutes: 60, // well under the 480 fullDayMinutes threshold
     status: AttendanceStatus.PRESENT, // stale/optimistic value on the row
     source: "SELF",
   };
@@ -134,6 +136,7 @@ test("the month builder reconciles holidays, approved leave and records across a
   const organization = await prisma.organization.create({
     data: { id: randomUUID(), name: "Attendance Test Co", slug: `attendance-test-${randomUUID()}`, createdAt: new Date() },
   });
+  await prisma.attendanceSettings.create({ data: { organizationId: organization.id, fullDayMinutes: FULL_DAY } });
 
   try {
     const employee = await prisma.employee.create({
@@ -184,13 +187,12 @@ test("the month builder reconciles holidays, approved leave and records across a
       year: 2026,
       month: 3,
       today: TODAY,
-      halfDayThresholdMinutes: THRESHOLD,
     });
 
     assert.equal(days.length, 31, "March has 31 days and every one is represented");
     const statusOn = (dateKey: string) => days.find((day) => day.date === dateKey)?.status;
 
-    assert.equal(statusOn("2026-03-02"), AttendanceStatus.HALF_DAY, "180 min < 240 threshold");
+    assert.equal(statusOn("2026-03-02"), AttendanceStatus.HALF_DAY, "180 min < 480 fullDayMinutes");
     assert.equal(statusOn("2026-03-03"), AttendanceStatus.ABSENT, "past working day, nothing recorded");
     assert.equal(statusOn("2026-03-04"), AttendanceStatus.HOLIDAY);
     assert.equal(statusOn("2026-03-05"), AttendanceStatus.ON_LEAVE, "first day of the approved range");

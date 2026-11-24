@@ -99,6 +99,7 @@ model Organization {
   payrollSettings   PayrollSettings?
   payrollRuns       PayrollRun[]
   taxDeclarations   EmployeeTaxDeclaration[]
+  attendanceSettings AttendanceSettings?
 
   @@unique([slug])
   @@map("organization")
@@ -458,6 +459,27 @@ enum AttendanceSource {
   // both win over recomputing status from clock times (see
   // isExplicitHumanDecision in src/modules/attendance/derivation.ts).
   REGULARIZED
+}
+
+// Per-org attendance policy — one singleton row per tenant, created at
+// company registration and read by deriveDailyStatus / countWorkingDays.
+// Settings affect new calculations only; changing them never retroactively
+// recomputes stored AttendanceRecords.
+model AttendanceSettings {
+  id             String @id @default(cuid())
+  organizationId String @unique
+
+  fullDayMinutes             Int     @default(480)
+  halfDayMinutes             Int     @default(240)
+  weekOffDays                Int[]   @default([0, 6])
+  allowRegularization        Boolean @default(true)
+  maxRegularizationsPerMonth Int?
+  regularizationWindowDays   Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 // One row per (employee, day) — only for days something was actually

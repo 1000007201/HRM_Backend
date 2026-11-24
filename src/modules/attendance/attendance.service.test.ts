@@ -21,6 +21,7 @@ const withOrg = async (run: (organizationId: string, employeeId: string) => Prom
   const organization = await prisma.organization.create({
     data: { id: randomUUID(), name: "Attendance Svc Co", slug: `attendance-svc-${randomUUID()}`, createdAt: new Date() },
   });
+  await prisma.attendanceSettings.create({ data: { organizationId: organization.id } });
   try {
     const employee = await prisma.employee.create({
       data: {
@@ -39,10 +40,10 @@ const withOrg = async (run: (organizationId: string, employeeId: string) => Prom
 test("check-in then check-out produces one record with worked minutes and PRESENT", async () => {
   await withOrg(async (organizationId, employeeId) => {
     await checkIn(prisma, { organizationId, employeeId, now: WEDNESDAY_9AM });
-    const record = await checkOut(prisma, { employeeId, now: WEDNESDAY_6PM });
+    const record = await checkOut(prisma, { organizationId, employeeId, now: WEDNESDAY_6PM });
 
     assert.equal(record.workedMinutes, 540, "09:00 -> 18:00 is 9 hours");
-    assert.equal(record.status, AttendanceStatus.PRESENT, "540 min is over the 240 threshold");
+    assert.equal(record.status, AttendanceStatus.PRESENT, "540 min is over the 480 fullDayMinutes threshold");
     assert.equal(record.source, "SELF");
 
     const all = await prisma.attendanceRecord.findMany({ where: { employeeId } });
@@ -53,10 +54,10 @@ test("check-in then check-out produces one record with worked minutes and PRESEN
 test("a short day checks out as HALF_DAY", async () => {
   await withOrg(async (organizationId, employeeId) => {
     await checkIn(prisma, { organizationId, employeeId, now: WEDNESDAY_9AM });
-    const record = await checkOut(prisma, { employeeId, now: WEDNESDAY_11AM });
+    const record = await checkOut(prisma, { organizationId, employeeId, now: WEDNESDAY_11AM });
 
     assert.equal(record.workedMinutes, 120);
-    assert.equal(record.status, AttendanceStatus.HALF_DAY, "120 min is under the 240 threshold");
+    assert.equal(record.status, AttendanceStatus.HALF_DAY, "120 min is under the 480 fullDayMinutes threshold");
   });
 });
 
@@ -71,9 +72,9 @@ test("double check-in is rejected", async () => {
 });
 
 test("check-out without a check-in is rejected", async () => {
-  await withOrg(async (_organizationId, employeeId) => {
+  await withOrg(async (organizationId, employeeId) => {
     await assert.rejects(
-      () => checkOut(prisma, { employeeId, now: WEDNESDAY_6PM }),
+      () => checkOut(prisma, { organizationId, employeeId, now: WEDNESDAY_6PM }),
       (err: unknown) => err instanceof AppError && err.statusCode === 409,
     );
   });

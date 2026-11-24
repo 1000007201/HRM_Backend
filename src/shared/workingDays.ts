@@ -11,13 +11,30 @@
 // Dates are read/compared in UTC throughout, matching how Prisma round-trips
 // `@db.Date` columns (as UTC-midnight Date objects) — this keeps day-of-week
 // stable regardless of the server's local timezone.
+
+export const utcMidnight = (date: Date): Date =>
+  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+
+// "YYYY-MM-DD" in UTC — the key format for holidayDateKeys. Exported so the
+// set-building side (src/modules/holidays/holidays.ts) formats keys identically; a
+// mismatch here would silently stop holidays from being excluded.
+export const toUtcDateKey = (date: Date): string => date.toISOString().slice(0, 10);
+
+const DEFAULT_WEEK_OFF_DAYS: ReadonlySet<number> = new Set([0, 6]);
+
+export const isWeekOff = (date: Date, weekOffDays: ReadonlySet<number>): boolean =>
+  weekOffDays.has(date.getUTCDay());
+
+export const isWeekend = (date: Date): boolean => isWeekOff(date, DEFAULT_WEEK_OFF_DAYS);
+
 export const countWorkingDays = (
   startDate: Date,
   endDate: Date,
   isHalfDay: boolean,
   holidayDateKeys: ReadonlySet<string> = new Set(),
+  weekOffDays: ReadonlySet<number> = DEFAULT_WEEK_OFF_DAYS,
 ): number => {
-  const isNonWorking = (date: Date): boolean => isWeekend(date) || holidayDateKeys.has(toUtcDateKey(date));
+  const isNonWorking = (date: Date): boolean => isWeekOff(date, weekOffDays) || holidayDateKeys.has(toUtcDateKey(date));
 
   if (isHalfDay) {
     return isNonWorking(startDate) ? 0 : 0.5;
@@ -36,22 +53,6 @@ export const countWorkingDays = (
 
   return workingDays;
 };
-
-// "YYYY-MM-DD" in UTC — the key format for holidayDateKeys. Exported so the
-// set-building side (src/modules/holidays/holidays.ts) formats keys identically; a
-// mismatch here would silently stop holidays from being excluded.
-export const toUtcDateKey = (date: Date): string => date.toISOString().slice(0, 10);
-
-// Exported so attendance's deriveDailyStatus (src/modules/attendance/derivation.ts) reuses
-// the same weekend rule instead of re-deriving it — the WEEK_OFF layer there
-// and the skip here must never disagree.
-export const isWeekend = (date: Date): boolean => {
-  const day = date.getUTCDay();
-  return day === 0 || day === 6;
-};
-
-export const utcMidnight = (date: Date): Date =>
-  new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 
 // Every UTC calendar day from start to end, inclusive. Shared by the day
 // counter above and attendance's month builder so range-walking is written

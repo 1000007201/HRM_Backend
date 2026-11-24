@@ -16,6 +16,7 @@ import { leaveRequestRoutes } from "./modules/leave/leaveRequests.routes.js";
 import { systemAccrualRoutes } from "./modules/leave/systemAccrual.routes.js";
 import { holidayRoutes } from "./modules/holidays/holidays.routes.js";
 import { attendanceRoutes } from "./modules/attendance/attendance.routes.js";
+import { attendanceSettingsRoutes } from "./modules/attendance/attendanceSettings.routes.js";
 import { regularizationRoutes } from "./modules/attendance/regularizations.routes.js";
 import { expenseTypeRoutes } from "./modules/expenses/expenseTypes.routes.js";
 import { expenseRequestRoutes } from "./modules/expenses/expenseRequests.routes.js";
@@ -71,6 +72,7 @@ export const buildApp = (): FastifyInstance => {
   app.register(systemAccrualRoutes);
   app.register(holidayRoutes);
   app.register(attendanceRoutes);
+  app.register(attendanceSettingsRoutes);
   app.register(regularizationRoutes);
   app.register(expenseTypeRoutes);
   app.register(expenseRequestRoutes);

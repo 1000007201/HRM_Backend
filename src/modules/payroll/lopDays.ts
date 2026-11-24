@@ -2,11 +2,9 @@ import { type LopBasis, type Prisma, type PrismaClient } from "../../generated/p
 import { buildMonthlyAttendance, monthBounds } from "../attendance/derivation.js";
 import { getHolidayDateKeys } from "../holidays/holidays.js";
 import { countWorkingDays, eachUtcDateInRange } from "../../shared/workingDays.js";
-import { env } from "../../env.js";
+import { getAttendanceSettings, weekOffSet } from "../attendance/attendanceSettings.service.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
-
-const HALF_DAY_THRESHOLD_MINUTES = env.ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES;
 
 export interface LopResult {
   daysInMonth: number;
@@ -27,19 +25,17 @@ export const computeLopAndPaidDays = async (
   const { organizationId, employeeId, month, year, lopBasis } = params;
   const { startDate, endDate } = monthBounds(year, month);
 
-  const days = await buildMonthlyAttendance(db, {
-    organizationId,
-    employeeId,
-    year,
-    month,
-    today: new Date(),
-    halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
-  });
+  const [days, settings, holidayDateKeys] = await Promise.all([
+    buildMonthlyAttendance(db, { organizationId, employeeId, year, month, today: new Date() }),
+    getAttendanceSettings(db, organizationId),
+    getHolidayDateKeys(db, organizationId, startDate, endDate),
+  ]);
+
   const absentDays = days.filter((day) => day.status === "ABSENT").length;
   const workingDaysInMonth = days.filter((day) => day.status !== "WEEK_OFF" && day.status !== "HOLIDAY").length;
   const calendarDaysInMonth = eachUtcDateInRange(startDate, endDate).length;
 
-  const holidayDateKeys = await getHolidayDateKeys(db, organizationId, startDate, endDate);
+  const wod = weekOffSet(settings.weekOffDays);
   const unpaidLeaves = await db.leaveRequest.findMany({
     where: {
       organizationId,
@@ -56,7 +52,7 @@ export const computeLopAndPaidDays = async (
     // only the days inside this period count as LOP for this payslip.
     const overlapStart = leave.startDate < startDate ? startDate : leave.startDate;
     const overlapEnd = leave.endDate > endDate ? endDate : leave.endDate;
-    return sum + countWorkingDays(overlapStart, overlapEnd, leave.isHalfDay, holidayDateKeys);
+    return sum + countWorkingDays(overlapStart, overlapEnd, leave.isHalfDay, holidayDateKeys, wod);
   }, 0);
 
   const daysInMonth = lopBasis === "WORKING_DAYS" ? workingDaysInMonth : calendarDaysInMonth;

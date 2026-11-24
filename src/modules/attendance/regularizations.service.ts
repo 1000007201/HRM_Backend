@@ -6,14 +6,13 @@ import {
   type RegularizationType,
 } from "../../generated/prisma/client.js";
 import { AppError } from "../../core/errors.js";
-import { env } from "../../env.js";
 import { toUtcDateKey, utcMidnight } from "../../shared/workingDays.js";
 import { deriveDailyStatus, loadAttendanceContext, statusFromWorkedMinutes, toWorkedMinutes } from "./derivation.js";
+import { getAttendanceSettings, weekOffSet } from "./attendanceSettings.service.js";
 
 // Business operations for employee-initiated attendance corrections.
 // Approving is the only path that writes to AttendanceRecord; the request row
 // is kept either way as the audit trail.
-const HALF_DAY_THRESHOLD_MINUTES = env.ATTENDANCE_HALF_DAY_THRESHOLD_MINUTES;
 
 const requesterSelect = { employee: { select: { id: true, fullName: true } } } as const;
 
@@ -37,6 +36,45 @@ export const submitRegularization = async (prisma: PrismaClient, params: SubmitR
     throw new AppError(400, "VALIDATION", "Cannot regularize a future date");
   }
 
+  const settings = await getAttendanceSettings(prisma, organizationId);
+
+  if (!settings.allowRegularization) {
+    throw new AppError(403, "FORBIDDEN", "Regularization is disabled for your organization");
+  }
+
+  if (settings.regularizationWindowDays !== null) {
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const daysSinceDate = Math.floor((today.getTime() - date.getTime()) / msPerDay);
+    if (daysSinceDate > settings.regularizationWindowDays) {
+      throw new AppError(
+        400,
+        "VALIDATION",
+        `Cannot regularize a date more than ${settings.regularizationWindowDays} days ago`,
+      );
+    }
+  }
+
+  if (settings.maxRegularizationsPerMonth !== null) {
+    const monthStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+    const monthEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+    const countThisMonth = await prisma.regularizationRequest.count({
+      where: {
+        employeeId,
+        date: { gte: monthStart, lte: monthEnd },
+        status: { in: ["PENDING", "APPROVED"] },
+      },
+    });
+    if (countThisMonth >= settings.maxRegularizationsPerMonth) {
+      throw new AppError(
+        409,
+        "CONFLICT",
+        `You have reached the maximum of ${settings.maxRegularizationsPerMonth} regularizations per month`,
+      );
+    }
+  }
+
+  const wod = weekOffSet(settings.weekOffDays);
+
   // Reuse the same reconciliation every attendance view uses, rather than
   // re-deriving "is this a working day" here.
   const context = await loadAttendanceContext(prisma, organizationId, [employeeId], date, date);
@@ -46,7 +84,8 @@ export const submitRegularization = async (prisma: PrismaClient, params: SubmitR
     holidayDateKeys: context.holidayDateKeys,
     approvedLeaveDateKeys: context.approvedLeaveDateKeysByEmployeeId.get(employeeId) ?? new Set(),
     record: null,
-    halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
+    fullDayMinutes: settings.fullDayMinutes,
+    weekOffDays: wod,
   });
   if (derived === AttendanceStatus.WEEK_OFF) {
     throw new AppError(409, "CONFLICT", "That date is a week off — there is nothing to regularize");
@@ -108,14 +147,18 @@ export const listPendingRegularizations = async (prisma: PrismaClient, organizat
   }
 
   const dates = pending.map((item) => item.date.getTime());
-  const context = await loadAttendanceContext(
-    prisma,
-    organizationId,
-    [...new Set(pending.map((item) => item.employeeId))],
-    new Date(Math.min(...dates)),
-    new Date(Math.max(...dates)),
-  );
+  const [context, settings] = await Promise.all([
+    loadAttendanceContext(
+      prisma,
+      organizationId,
+      [...new Set(pending.map((item) => item.employeeId))],
+      new Date(Math.min(...dates)),
+      new Date(Math.max(...dates)),
+    ),
+    getAttendanceSettings(prisma, organizationId),
+  ]);
   const today = utcMidnight(new Date());
+  const wod = weekOffSet(settings.weekOffDays);
 
   return pending.map((item) => {
     const record = context.recordsByEmployeeAndDateKey.get(`${item.employeeId}|${toUtcDateKey(item.date)}`) ?? null;
@@ -129,7 +172,8 @@ export const listPendingRegularizations = async (prisma: PrismaClient, organizat
           holidayDateKeys: context.holidayDateKeys,
           approvedLeaveDateKeys: context.approvedLeaveDateKeysByEmployeeId.get(item.employeeId) ?? new Set(),
           record,
-          halfDayThresholdMinutes: HALF_DAY_THRESHOLD_MINUTES,
+          fullDayMinutes: settings.fullDayMinutes,
+          weekOffDays: wod,
         }),
         checkInAt: record?.checkInAt ?? null,
         checkOutAt: record?.checkOutAt ?? null,
@@ -165,9 +209,12 @@ export const approveRegularization = async (prisma: PrismaClient, params: Decide
         throw new AppError(409, "CONFLICT", "This request is no longer pending");
       }
 
-      const record = await tx.attendanceRecord.findUnique({
-        where: { employeeId_date: { employeeId: existing.employeeId, date: existing.date } },
-      });
+      const [record, settings] = await Promise.all([
+        tx.attendanceRecord.findUnique({
+          where: { employeeId_date: { employeeId: existing.employeeId, date: existing.date } },
+        }),
+        getAttendanceSettings(tx, organizationId),
+      ]);
 
       // A null requested field means "leave it alone", so merge onto what's
       // already stored rather than blanking it.
@@ -177,7 +224,7 @@ export const approveRegularization = async (prisma: PrismaClient, params: Decide
       // An explicitly requested status wins; otherwise fall back to the
       // shared worked-time rule so a pure missing-punch fix lands on the same
       // PRESENT/HALF_DAY split a self check-out would have produced.
-      const status = existing.requestedStatus ?? statusFromWorkedMinutes(workedMinutes, HALF_DAY_THRESHOLD_MINUTES);
+      const status = existing.requestedStatus ?? statusFromWorkedMinutes(workedMinutes, settings.fullDayMinutes);
 
       const data = {
         checkInAt,

@@ -86,6 +86,11 @@ export const registerCompany = async ({
     await grantAnnualForOrg(organization.id, new Date().getFullYear());
     await ensureDefaultDepartments(organization.id);
     await ensureDefaultExpenseTypes(organization.id);
+    await prisma.attendanceSettings.upsert({
+      where: { organizationId: organization.id },
+      create: { organizationId: organization.id },
+      update: {},
+    });
   } catch (err) {
     console.error(
       `[registerCompany] org setup failed for userId=${user.id} organizationId=${organization.id}; cleaning up`,
