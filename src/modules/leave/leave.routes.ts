@@ -6,7 +6,7 @@ import { AppError } from "../../core/errors.js";
 import { ok } from "../../core/response.js";
 import { accrueForOrg } from "./accrual.js";
 import { grantAnnualForOrg } from "./floaterGrant.js";
-import { createLeaveType, leaveTypeSelect, updateFloaterQuota } from "./leaveTypes.js";
+import { createLeaveType, leaveTypeSelect, toggleLeaveTypeActive, updateFloaterQuota, updateLeaveType } from "./leaveTypes.js";
 
 const ADMIN_ROLES = [EmployeeRole.ADMIN];
 
@@ -39,6 +39,16 @@ const createLeaveTypeSchema = z.object({
   allowHalfDay: z.boolean().default(true),
 });
 
+const updateLeaveTypeSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  annualCap: z.number().int().min(1).max(365).optional(),
+  accrualFrequency: z.enum(["ANNUAL", "MONTHLY"]).optional(),
+  isPaid: z.boolean().optional(),
+  allowHalfDay: z.boolean().optional(),
+});
+
+const leaveTypeIdParamSchema = z.object({ id: z.string().min(1) });
+
 // Every active leave type for the org, joined in memory with any existing
 // LeaveBalance row for (employee, year) — a type with no row yet (accrual
 // hasn't run this year) still shows up, at zero, instead of being omitted.
@@ -69,9 +79,11 @@ const getEmployeeLeaveBalances = async (organizationId: string, employeeId: stri
 export const leaveRoutes = async (app: FastifyInstance) => {
   app.get("/leave/types", { preHandler: app.requireAuth }, async (request) => {
     const { organizationId } = request.auth;
+    const { all } = (request.query as { all?: string }) ?? {};
+    const includeInactive = all === "true";
 
     const leaveTypes = await prisma.leaveType.findMany({
-      where: { organizationId, isActive: true },
+      where: { organizationId, ...(includeInactive ? {} : { isActive: true }) },
       select: leaveTypeSelect,
       orderBy: { code: "asc" },
     });
@@ -96,6 +108,23 @@ export const leaveRoutes = async (app: FastifyInstance) => {
     await accrueForOrg(organizationId, now.getFullYear(), now.getMonth() + 1);
 
     reply.status(201);
+    return ok({ leaveType });
+  });
+
+  app.patch("/leave/types/:id", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
+    const { organizationId } = request.auth;
+    const { id } = leaveTypeIdParamSchema.parse(request.params);
+    const body = updateLeaveTypeSchema.parse(request.body);
+
+    const leaveType = await updateLeaveType(id, organizationId, body);
+    return ok({ leaveType });
+  });
+
+  app.patch("/leave/types/:id/toggle", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request) => {
+    const { organizationId } = request.auth;
+    const { id } = leaveTypeIdParamSchema.parse(request.params);
+
+    const leaveType = await toggleLeaveTypeActive(id, organizationId);
     return ok({ leaveType });
   });
 

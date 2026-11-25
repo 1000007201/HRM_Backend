@@ -117,6 +117,7 @@ export const leaveTypeSelect = {
   annualCap: true,
   isPaid: true,
   allowHalfDay: true,
+  isActive: true,
   allocationType: true,
   annualGrantDays: true,
   isFloater: true,
@@ -144,6 +145,51 @@ export const createLeaveType = (input: CreateLeaveTypeInput) => {
       isPaid: input.isPaid,
       allowHalfDay: input.allowHalfDay,
     },
+    select: leaveTypeSelect,
+  });
+};
+
+export interface UpdateLeaveTypeInput {
+  name?: string;
+  annualCap?: number;
+  accrualFrequency?: LeaveAccrualFrequency;
+  isPaid?: boolean;
+  allowHalfDay?: boolean;
+}
+
+export const updateLeaveType = async (id: string, organizationId: string, input: UpdateLeaveTypeInput) => {
+  const existing = await prisma.leaveType.findFirst({ where: { id, organizationId } });
+  if (!existing) throw new AppError(404, "NOT_FOUND", "Leave type not found");
+  if (existing.isFloater) throw new AppError(400, "VALIDATION", "Use the floater quota endpoint to edit the floater leave type");
+
+  const data: Prisma.LeaveTypeUpdateInput = {};
+  if (input.name !== undefined) data.name = input.name;
+  if (input.isPaid !== undefined) data.isPaid = input.isPaid;
+  if (input.allowHalfDay !== undefined) data.allowHalfDay = input.allowHalfDay;
+
+  const annualCap = input.annualCap ?? existing.annualCap;
+  const frequency =
+    input.accrualFrequency ?? (existing.accrualPerMonth.equals(existing.annualCap) ? "ANNUAL" : "MONTHLY");
+
+  if (input.annualCap !== undefined || input.accrualFrequency !== undefined) {
+    data.annualCap = annualCap;
+    data.accrualPerMonth =
+      frequency === "ANNUAL"
+        ? new Prisma.Decimal(annualCap)
+        : new Prisma.Decimal(annualCap).dividedBy(12).toDecimalPlaces(2);
+  }
+
+  return prisma.leaveType.update({ where: { id }, data, select: leaveTypeSelect });
+};
+
+export const toggleLeaveTypeActive = async (id: string, organizationId: string) => {
+  const existing = await prisma.leaveType.findFirst({ where: { id, organizationId } });
+  if (!existing) throw new AppError(404, "NOT_FOUND", "Leave type not found");
+  if (existing.isFloater) throw new AppError(400, "VALIDATION", "The floater leave type cannot be deactivated");
+
+  return prisma.leaveType.update({
+    where: { id },
+    data: { isActive: !existing.isActive },
     select: leaveTypeSelect,
   });
 };

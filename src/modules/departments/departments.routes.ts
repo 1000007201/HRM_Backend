@@ -27,9 +27,15 @@ export const departmentRoutes = async (app: FastifyInstance) => {
     const departments = await prisma.department.findMany({
       where: { organizationId },
       orderBy: { name: "asc" },
+      include: { _count: { select: { employees: true } } },
     });
 
-    return ok({ departments });
+    return ok({
+      departments: departments.map(({ _count, ...department }) => ({
+        ...department,
+        employeeCount: _count.employees,
+      })),
+    });
   });
 
   app.post("/api/departments", { preHandler: app.requireRole(ADMIN_ROLES) }, async (request, reply) => {
